@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:latlong2/latlong.dart';
 
 import '../data/auth_service.dart';
 import '../data/rain_report_repository.dart';
@@ -36,7 +37,7 @@ class _MapScreenState extends State<MapScreen> {
   );
 
   ({double lat, double lng}) _center = _defaultCenter;
-  GoogleMapController? _mapController;
+  final MapController _mapController = MapController();
   late Stream<List<RainReport>> _reportsStream;
 
   @override
@@ -65,9 +66,7 @@ class _MapScreenState extends State<MapScreen> {
       final loc = await (widget.locationProvider ?? _resolveDeviceLocation)();
       if (!mounted) return;
       _updateCenter(loc);
-      _mapController?.animateCamera(
-        CameraUpdate.newLatLng(LatLng(loc.lat, loc.lng)),
-      );
+      _mapController.move(LatLng(loc.lat, loc.lng), 14);
     } catch (_) {
       // Fall back to default center when location permission/service is unavailable
     }
@@ -90,13 +89,13 @@ class _MapScreenState extends State<MapScreen> {
     return (lat: pos.latitude, lng: pos.longitude);
   }
 
-  double _hueForIntensity(RainIntensity intensity) {
+  Color _colorForIntensity(RainIntensity intensity) {
     return switch (intensity) {
-      RainIntensity.light => BitmapDescriptor.hueAzure,
-      RainIntensity.moderate => BitmapDescriptor.hueBlue,
-      RainIntensity.heavy => BitmapDescriptor.hueViolet,
-      RainIntensity.storm => BitmapDescriptor.hueRed,
-      RainIntensity.stopped => BitmapDescriptor.hueGreen,
+      RainIntensity.light => Colors.lightBlue,
+      RainIntensity.moderate => Colors.blue.shade700,
+      RainIntensity.heavy => Colors.deepPurple,
+      RainIntensity.storm => Colors.red.shade700,
+      RainIntensity.stopped => Colors.green,
     };
   }
 
@@ -182,18 +181,22 @@ class _MapScreenState extends State<MapScreen> {
         final reports = snapshot.data ?? const <RainReport>[];
         final markers = reports.map((report) {
           return Marker(
-            markerId: MarkerId(report.id),
-            position: LatLng(report.lat, report.lng),
-            icon: BitmapDescriptor.defaultMarkerWithHue(
-              _hueForIntensity(report.intensity),
+            point: LatLng(report.lat, report.lng),
+            width: 44,
+            height: 44,
+            child: GestureDetector(
+              onTap: () => _openPinDetails(report),
+              child: Tooltip(
+                message: '${report.intensity.label} Rain',
+                child: Icon(
+                  Icons.location_on,
+                  size: 40,
+                  color: _colorForIntensity(report.intensity),
+                ),
+              ),
             ),
-            infoWindow: InfoWindow(
-              title: '${report.intensity.label} Rain',
-              snippet: report.note,
-            ),
-            onTap: () => _openPinDetails(report),
           );
-        }).toSet();
+        }).toList();
 
         return Scaffold(
           appBar: AppBar(
@@ -208,39 +211,25 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ],
           ),
-          body: Stack(
+          body: FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: LatLng(_center.lat, _center.lng),
+              initialZoom: 14,
+              onPositionChanged: (camera, _) {
+                _center = (
+                  lat: camera.center.latitude,
+                  lng: camera.center.longitude,
+                );
+              },
+            ),
             children: [
               if (widget.useNativeMapView)
-                GoogleMap(
-                  initialCameraPosition: CameraPosition(
-                    target: LatLng(_center.lat, _center.lng),
-                    zoom: 14,
-                  ),
-                  myLocationEnabled: true,
-                  myLocationButtonEnabled: true,
-                  markers: markers,
-                  onMapCreated: (controller) => _mapController = controller,
-                  onCameraMove: (pos) {
-                    _center = (
-                      lat: pos.target.latitude,
-                      lng: pos.target.longitude,
-                    );
-                  },
-                )
-              else
-                ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: reports.length,
-                  itemBuilder: (context, index) {
-                    final r = reports[index];
-                    return ListTile(
-                      leading: const Icon(Icons.water_drop),
-                      title: Text('${r.intensity.label} Rain'),
-                      subtitle: r.note != null ? Text(r.note!) : null,
-                      onTap: () => _openPinDetails(r),
-                    );
-                  },
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.example.rainreporter.rain_reporter',
                 ),
+              MarkerLayer(markers: markers),
             ],
           ),
           floatingActionButton: FloatingActionButton.extended(

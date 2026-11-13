@@ -1,3 +1,4 @@
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rain_reporter/data/auth_service.dart';
 import 'package:rain_reporter/data/rain_report_repository.dart';
@@ -23,7 +24,7 @@ class _CountingRepository extends InMemoryRainReportRepository {
 }
 
 void main() {
-  testWidgets('MapScreen renders active report count, opens ReportBottomSheet, submits report, and does not recreate stream on rebuild', (tester) async {
+  testWidgets('MapScreen renders OpenStreetMap (FlutterMap), opens ReportBottomSheet, submits report, and does not recreate stream on rebuild', (tester) async {
     final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'test-uid');
 
@@ -37,6 +38,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.byType(FlutterMap), findsOneWidget);
     final initialWatchCalls = repo.watchCalls;
     expect(find.text('Report Rain'), findsOneWidget);
     expect(find.text('0 active nearby'), findsOneWidget);

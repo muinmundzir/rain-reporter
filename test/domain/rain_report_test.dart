@@ -94,9 +94,10 @@ void main() {
     expect(visible, isEmpty);
   });
 
-  test('AndroidManifest declares INTERNET permission and firestore.rules allows expiresAt clock-skew tolerance', () {
+  test('AndroidManifest declares INTERNET permission without Google Maps API key and firestore.rules allows expiresAt clock-skew tolerance', () {
     final manifest = File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
     expect(manifest, contains('android.permission.INTERNET'));
+    expect(manifest, isNot(contains('com.google.android.geo.API_KEY')));
 
     final rules = File('firestore.rules').readAsStringSync();
     expect(rules, contains("duration.value(28, 'm')"));
