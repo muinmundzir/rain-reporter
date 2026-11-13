@@ -1,30 +1,34 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
+import 'package:rain_reporter/data/auth_service.dart';
+import 'package:rain_reporter/data/rain_report_repository.dart';
 import 'package:rain_reporter/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('MapScreen renders active report count, opens ReportBottomSheet, and submits report', (tester) async {
+    final repo = InMemoryRainReportRepository();
+    final auth = FakeAuthService(uid: 'test-uid');
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    await tester.pumpWidget(
+      RainReporterApp(
+        authService: auth,
+        repository: repo,
+        useNativeMapView: false,
+        locationProvider: () async => (lat: -6.2000, lng: 106.8166),
+      ),
+    );
+    await tester.pumpAndSettle();
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+    expect(find.text('Report Rain'), findsOneWidget);
+    expect(find.text('0 active nearby'), findsOneWidget);
+
+    await tester.tap(find.text('Report Rain'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Heavy'));
     await tester.pump();
+    await tester.tap(find.text('Submit Report'));
+    await tester.pumpAndSettle();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text('1 active nearby'), findsOneWidget);
   });
 }
