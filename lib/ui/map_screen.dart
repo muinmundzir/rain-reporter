@@ -37,18 +37,34 @@ class _MapScreenState extends State<MapScreen> {
 
   ({double lat, double lng}) _center = _defaultCenter;
   GoogleMapController? _mapController;
+  late Stream<List<RainReport>> _reportsStream;
 
   @override
   void initState() {
     super.initState();
+    _reportsStream = widget.repository.watchActiveReports(
+      centerLat: _center.lat,
+      centerLng: _center.lng,
+    );
     _initLocation();
+  }
+
+  void _updateCenter(({double lat, double lng}) newCenter) {
+    if (newCenter.lat == _center.lat && newCenter.lng == _center.lng) return;
+    setState(() {
+      _center = newCenter;
+      _reportsStream = widget.repository.watchActiveReports(
+        centerLat: _center.lat,
+        centerLng: _center.lng,
+      );
+    });
   }
 
   Future<void> _initLocation() async {
     try {
       final loc = await (widget.locationProvider ?? _resolveDeviceLocation)();
       if (!mounted) return;
-      setState(() => _center = loc);
+      _updateCenter(loc);
       _mapController?.animateCamera(
         CameraUpdate.newLatLng(LatLng(loc.lat, loc.lng)),
       );
@@ -161,10 +177,7 @@ class _MapScreenState extends State<MapScreen> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<RainReport>>(
-      stream: widget.repository.watchActiveReports(
-        centerLat: _center.lat,
-        centerLng: _center.lng,
-      ),
+      stream: _reportsStream,
       builder: (context, snapshot) {
         final reports = snapshot.data ?? const <RainReport>[];
         final markers = reports.map((report) {

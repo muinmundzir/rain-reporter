@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rain_reporter/domain/location_privacy.dart';
 import 'package:rain_reporter/domain/rain_intensity.dart';
@@ -65,5 +66,40 @@ void main() {
       now: now,
     );
     expect(visible.map((r) => r.id), isEmpty);
+  });
+
+  test('marking a pin stopped (stoppedCount >= 1) hides it and supersedes older nearby rain reports within 300m', () {
+    final olderNearbyRain = RainReport.create(
+      id: 'rain-older',
+      uid: 'u1',
+      intensity: RainIntensity.moderate,
+      lat: -6.2000,
+      lng: 106.8166,
+      createdAt: t0,
+    );
+    final pinMarkedStopped = RainReport.create(
+      id: 'rain-marked-stopped',
+      uid: 'u2',
+      intensity: RainIntensity.heavy,
+      lat: -6.2004,
+      lng: 106.8166,
+      createdAt: t0.add(const Duration(minutes: 2)),
+      stoppedCount: 1,
+    );
+
+    final visible = LocationPrivacy.filterActiveReports(
+      [olderNearbyRain, pinMarkedStopped],
+      now: t0.add(const Duration(minutes: 3)),
+    );
+    expect(visible, isEmpty);
+  });
+
+  test('AndroidManifest declares INTERNET permission and firestore.rules allows expiresAt clock-skew tolerance', () {
+    final manifest = File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
+    expect(manifest, contains('android.permission.INTERNET'));
+
+    final rules = File('firestore.rules').readAsStringSync();
+    expect(rules, contains("duration.value(28, 'm')"));
+    expect(rules, contains("duration.value(32, 'm')"));
   });
 }

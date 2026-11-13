@@ -109,12 +109,12 @@ class LocationPrivacy {
   }) {
     final unexpired = reports.where((r) => r.isActiveAt(now)).toList();
     final stoppedReports = unexpired
-        .where((r) => r.intensity == RainIntensity.stopped)
+        .where((r) => r.intensity == RainIntensity.stopped || r.stoppedCount >= 1)
         .toList();
 
     return unexpired.where((report) {
       if (report.intensity == RainIntensity.stopped) return false;
-      if (report.stoppedCount >= 2) return false;
+      if (report.stoppedCount >= 1) return false;
 
       final supersededByStopped = stoppedReports.any((stopped) {
         if (!stopped.createdAt.isAfter(report.createdAt)) return false;

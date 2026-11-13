@@ -193,7 +193,8 @@ service cloud.firestore {
         request.resource.data.confirmCount == 1 &&
         request.resource.data.stoppedCount == 0 &&
         request.resource.data.createdAt == request.time &&
-        request.resource.data.expiresAt == request.time + duration.value(30, 'm') &&
+        request.resource.data.expiresAt >= request.time + duration.value(28, 'm') &&
+        request.resource.data.expiresAt <= request.time + duration.value(32, 'm') &&
         isWithinReportRateLimit();
 
       allow update: if isAuthenticated() &&

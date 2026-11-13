@@ -1,11 +1,30 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rain_reporter/data/auth_service.dart';
 import 'package:rain_reporter/data/rain_report_repository.dart';
+import 'package:rain_reporter/domain/rain_report.dart';
 import 'package:rain_reporter/main.dart';
 
+class _CountingRepository extends InMemoryRainReportRepository {
+  int watchCalls = 0;
+
+  @override
+  Stream<List<RainReport>> watchActiveReports({
+    required double centerLat,
+    required double centerLng,
+    double radiusMeters = 10000,
+  }) {
+    watchCalls++;
+    return super.watchActiveReports(
+      centerLat: centerLat,
+      centerLng: centerLng,
+      radiusMeters: radiusMeters,
+    );
+  }
+}
+
 void main() {
-  testWidgets('MapScreen renders active report count, opens ReportBottomSheet, and submits report', (tester) async {
-    final repo = InMemoryRainReportRepository();
+  testWidgets('MapScreen renders active report count, opens ReportBottomSheet, submits report, and does not recreate stream on rebuild', (tester) async {
+    final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'test-uid');
 
     await tester.pumpWidget(
@@ -18,6 +37,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    final initialWatchCalls = repo.watchCalls;
     expect(find.text('Report Rain'), findsOneWidget);
     expect(find.text('0 active nearby'), findsOneWidget);
 
@@ -30,5 +50,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('1 active nearby'), findsOneWidget);
+    expect(repo.watchCalls, equals(initialWatchCalls));
   });
 }
