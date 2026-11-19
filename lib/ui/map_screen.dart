@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
@@ -5,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../data/auth_service.dart';
 import '../data/rain_report_repository.dart';
+import '../domain/location_privacy.dart';
 import '../domain/rain_intensity.dart';
 import '../domain/rain_report.dart';
 import 'pin_detail_bottom_sheet.dart';
@@ -18,6 +21,8 @@ class MapScreen extends StatefulWidget {
     this.locationProvider,
     this.useNativeMapView = true,
     this.clock,
+    this.panDebounceDuration = const Duration(milliseconds: 400),
+    this.panRefreshThresholdMeters = 500,
   });
 
   final AuthService authService;
@@ -25,6 +30,8 @@ class MapScreen extends StatefulWidget {
   final Future<({double lat, double lng})?> Function()? locationProvider;
   final bool useNativeMapView;
   final DateTime Function()? clock;
+  final Duration panDebounceDuration;
+  final double panRefreshThresholdMeters;
 
   @override
   State<MapScreen> createState() => _MapScreenState();
@@ -37,29 +44,60 @@ class _MapScreenState extends State<MapScreen> {
   );
 
   ({double lat, double lng}) _cameraCenter = _defaultCenter;
+  ({double lat, double lng}) _lastQueriedCenter = _defaultCenter;
   final MapController _mapController = MapController();
   late Stream<List<RainReport>> _reportsStream;
+  Timer? _panDebounceTimer;
 
   @override
   void initState() {
     super.initState();
     _reportsStream = widget.repository.watchActiveReports(
-      centerLat: _cameraCenter.lat,
-      centerLng: _cameraCenter.lng,
+      centerLat: _lastQueriedCenter.lat,
+      centerLng: _lastQueriedCenter.lng,
     );
     _initLocation();
   }
 
-  void _updateCenter(({double lat, double lng}) newCenter) {
-    if (newCenter.lat == _cameraCenter.lat && newCenter.lng == _cameraCenter.lng) {
+  @override
+  void dispose() {
+    _panDebounceTimer?.cancel();
+    super.dispose();
+  }
+
+  void _refreshReportsForCenter(({double lat, double lng}) newCenter) {
+    if (newCenter.lat == _lastQueriedCenter.lat &&
+        newCenter.lng == _lastQueriedCenter.lng) {
       return;
     }
+    _panDebounceTimer?.cancel();
     setState(() {
       _cameraCenter = newCenter;
+      _lastQueriedCenter = newCenter;
       _reportsStream = widget.repository.watchActiveReports(
-        centerLat: _cameraCenter.lat,
-        centerLng: _cameraCenter.lng,
+        centerLat: _lastQueriedCenter.lat,
+        centerLng: _lastQueriedCenter.lng,
       );
+    });
+  }
+
+  void _onMapPositionChanged(MapCamera camera) {
+    _cameraCenter = (
+      lat: camera.center.latitude,
+      lng: camera.center.longitude,
+    );
+    _panDebounceTimer?.cancel();
+    _panDebounceTimer = Timer(widget.panDebounceDuration, () {
+      if (!mounted) return;
+      final movedMeters = LocationPrivacy.distanceMeters(
+        _lastQueriedCenter.lat,
+        _lastQueriedCenter.lng,
+        _cameraCenter.lat,
+        _cameraCenter.lng,
+      );
+      if (movedMeters > widget.panRefreshThresholdMeters) {
+        _refreshReportsForCenter(_cameraCenter);
+      }
     });
   }
 
@@ -74,7 +112,7 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _initLocation() async {
     final loc = await _fetchDeviceLocation();
     if (!mounted || loc == null) return;
-    _updateCenter(loc);
+    _refreshReportsForCenter(loc);
     _mapController.move(LatLng(loc.lat, loc.lng), 14);
   }
 
@@ -233,12 +271,7 @@ class _MapScreenState extends State<MapScreen> {
             options: MapOptions(
               initialCenter: LatLng(_cameraCenter.lat, _cameraCenter.lng),
               initialZoom: 14,
-              onPositionChanged: (camera, _) {
-                _cameraCenter = (
-                  lat: camera.center.latitude,
-                  lng: camera.center.longitude,
-                );
-              },
+              onPositionChanged: (camera, _) => _onMapPositionChanged(camera),
             ),
             children: [
               if (widget.useNativeMapView)
