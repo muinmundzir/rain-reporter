@@ -26,6 +26,7 @@ class MapScreen extends StatefulWidget {
     this.clock,
     this.panDebounceDuration = const Duration(milliseconds: 400),
     this.panRefreshThresholdMeters = 500,
+    this.stopVoteMaxDistanceMeters = 500,
   });
 
   final AuthService authService;
@@ -36,6 +37,7 @@ class MapScreen extends StatefulWidget {
   final DateTime Function()? clock;
   final Duration panDebounceDuration;
   final double panRefreshThresholdMeters;
+  final double stopVoteMaxDistanceMeters;
 
   @override
   State<MapScreen> createState() => _MapScreenState();
@@ -330,6 +332,35 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     required RainReport report,
     required bool isStillRaining,
   }) async {
+    if (!isStillRaining) {
+      final loc = await _fetchDeviceLocation();
+      if (!mounted) return;
+      if (loc == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Location access is required to mark rain stopped.'),
+          ),
+        );
+        return;
+      }
+      final dist = LocationPrivacy.distanceMeters(
+        loc.lat,
+        loc.lng,
+        report.lat,
+        report.lng,
+      );
+      if (dist > widget.stopVoteMaxDistanceMeters) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'You must be within ${widget.stopVoteMaxDistanceMeters.round()}m of this pin to mark it stopped.',
+            ),
+          ),
+        );
+        return;
+      }
+    }
+
     try {
       final uid = await widget.authService.ensureAnonymousUid();
       await widget.repository.voteReport(

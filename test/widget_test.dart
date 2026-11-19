@@ -532,6 +532,103 @@ void main() {
 
     expect(find.text('Offline mode (local only)'), findsOneWidget);
   });
+
+  testWidgets('blocks Stopped here when GPS is unavailable', (tester) async {
+    final repo = _CountingRepository();
+    final auth = FakeAuthService(uid: 'voter-uid');
+    await repo.submitReport(
+      uid: 'u1',
+      intensity: RainIntensity.heavy,
+      rawLat: -6.9175,
+      rawLng: 107.6191,
+    );
+
+    await tester.pumpWidget(
+      RainReporterApp(
+        authService: auth,
+        repository: repo,
+        useNativeMapView: false,
+        locationProvider: () async => null,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.location_on));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Stopped here'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Location access is required to mark rain stopped.'),
+      findsOneWidget,
+    );
+    expect(find.text('1 active nearby'), findsOneWidget);
+  });
+
+  testWidgets('blocks Stopped here when user GPS is >500m from the pin', (tester) async {
+    final repo = _CountingRepository();
+    final auth = FakeAuthService(uid: 'voter-uid');
+    // ~815m east of user's GPS
+    await repo.submitReport(
+      uid: 'u1',
+      intensity: RainIntensity.heavy,
+      rawLat: -6.9175,
+      rawLng: 107.6265,
+    );
+
+    await tester.pumpWidget(
+      RainReporterApp(
+        authService: auth,
+        repository: repo,
+        useNativeMapView: false,
+        locationProvider: () async => (lat: -6.9175, lng: 107.6191),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.location_on));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Stopped here'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('You must be within 500m of this pin to mark it stopped.'),
+      findsOneWidget,
+    );
+    expect(find.text('1 active nearby'), findsOneWidget);
+  });
+
+  testWidgets('allows Stopped here when user GPS is within 500m of the pin', (tester) async {
+    final repo = _CountingRepository();
+    final auth = FakeAuthService(uid: 'voter-uid');
+    // ~100m east of user's GPS
+    await repo.submitReport(
+      uid: 'u1',
+      intensity: RainIntensity.heavy,
+      rawLat: -6.9175,
+      rawLng: 107.6200,
+    );
+
+    await tester.pumpWidget(
+      RainReporterApp(
+        authService: auth,
+        repository: repo,
+        useNativeMapView: false,
+        locationProvider: () async => (lat: -6.9175, lng: 107.6191),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.location_on));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Stopped here'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('0 active nearby'), findsOneWidget);
+  });
 }
 
 class _CustomStreamRepository extends InMemoryRainReportRepository {
