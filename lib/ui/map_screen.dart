@@ -8,8 +8,10 @@ import 'package:latlong2/latlong.dart';
 import '../data/auth_service.dart';
 import '../data/rain_report_repository.dart';
 import '../domain/location_privacy.dart';
+import '../domain/rain_cluster.dart';
 import '../domain/rain_intensity.dart';
 import '../domain/rain_report.dart';
+import 'cluster_detail_bottom_sheet.dart';
 import 'pin_detail_bottom_sheet.dart';
 import 'report_bottom_sheet.dart';
 
@@ -216,6 +218,26 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  Future<void> _openClusterDetails(RainCluster cluster) async {
+    final now = (widget.clock ?? () => DateTime.now().toUtc())();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => ClusterDetailBottomSheet(
+        cluster: cluster,
+        now: now,
+        onConfirmStillRaining: (report) async {
+          Navigator.of(ctx).pop();
+          await _handleVote(report: report, isStillRaining: true);
+        },
+        onMarkStopped: (report) async {
+          Navigator.of(ctx).pop();
+          await _handleVote(report: report, isStillRaining: false);
+        },
+      ),
+    );
+  }
+
   Future<void> _handleVote({
     required RainReport report,
     required bool isStillRaining,
@@ -241,19 +263,72 @@ class _MapScreenState extends State<MapScreen> {
       stream: _reportsStream,
       builder: (context, snapshot) {
         final reports = snapshot.data ?? const <RainReport>[];
-        final markers = reports.map((report) {
+        final clusters = RainClusterer.cluster(reports);
+        final circles = clusters.map((cluster) {
+          final color = _colorForIntensity(cluster.strongestIntensity);
+          return CircleMarker(
+            point: LatLng(cluster.centerLat, cluster.centerLng),
+            radius: cluster.radiusMeters,
+            useRadiusInMeter: true,
+            color: color.withValues(alpha: 0.22),
+            borderColor: color.withValues(alpha: 0.6),
+            borderStrokeWidth: 1.5,
+          );
+        }).toList();
+
+        final markers = clusters.map((cluster) {
+          final color = _colorForIntensity(cluster.strongestIntensity);
+          if (!cluster.isCluster) {
+            final report = cluster.reports.first;
+            return Marker(
+              point: LatLng(cluster.centerLat, cluster.centerLng),
+              width: 44,
+              height: 44,
+              child: GestureDetector(
+                onTap: () => _openPinDetails(report),
+                child: Tooltip(
+                  message: '${report.intensity.label} Rain',
+                  child: Icon(
+                    Icons.location_on,
+                    size: 40,
+                    color: color,
+                  ),
+                ),
+              ),
+            );
+          }
+
           return Marker(
-            point: LatLng(report.lat, report.lng),
+            point: LatLng(cluster.centerLat, cluster.centerLng),
             width: 44,
             height: 44,
             child: GestureDetector(
-              onTap: () => _openPinDetails(report),
+              onTap: () => _openClusterDetails(cluster),
               child: Tooltip(
-                message: '${report.intensity.label} Rain',
-                child: Icon(
-                  Icons.location_on,
-                  size: 40,
-                  color: _colorForIntensity(report.intensity),
+                message:
+                    '${cluster.strongestIntensity.label} Rain (${cluster.reports.length} reports)',
+                child: Container(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: color,
+                    border: Border.all(color: Colors.white, width: 2),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Colors.black26,
+                        blurRadius: 4,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    '${cluster.reports.length}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -286,6 +361,7 @@ class _MapScreenState extends State<MapScreen> {
                   urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                   userAgentPackageName: 'com.example.rainreporter.rain_reporter',
                 ),
+              CircleLayer(circles: circles),
               MarkerLayer(markers: markers),
             ],
           ),

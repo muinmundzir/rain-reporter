@@ -9,7 +9,9 @@ import 'package:rain_reporter/data/rain_report_repository.dart';
 import 'package:rain_reporter/domain/rain_intensity.dart';
 import 'package:rain_reporter/domain/rain_report.dart';
 import 'package:rain_reporter/main.dart';
+import 'package:rain_reporter/ui/cluster_detail_bottom_sheet.dart';
 import 'package:rain_reporter/ui/map_screen.dart';
+import 'package:rain_reporter/ui/pin_detail_bottom_sheet.dart';
 
 class _CountingRepository extends InMemoryRainReportRepository {
   int watchCalls = 0;
@@ -312,5 +314,121 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Submit Report'), findsOneWidget);
+  });
+
+  testWidgets('renders CircleLayer with 300m radius for a single active report and opens PinDetailBottomSheet on tap', (tester) async {
+    final repo = _CountingRepository();
+    final auth = FakeAuthService(uid: 'test-uid');
+    await repo.submitReport(
+      uid: 'u1',
+      intensity: RainIntensity.heavy,
+      rawLat: -6.2000,
+      rawLng: 106.8166,
+      note: 'Pouring hard',
+    );
+
+    await tester.pumpWidget(
+      RainReporterApp(
+        authService: auth,
+        repository: repo,
+        useNativeMapView: false,
+        locationProvider: () async => (lat: -6.2000, lng: 106.8166),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final circleLayer = tester.widget<CircleLayer>(find.byType(CircleLayer));
+    expect(circleLayer.circles, hasLength(1));
+    expect(circleLayer.circles.single.useRadiusInMeter, isTrue);
+    expect(circleLayer.circles.single.radius, equals(300));
+
+    await tester.tap(find.byIcon(Icons.location_on));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(PinDetailBottomSheet), findsOneWidget);
+    expect(find.text('Pouring hard'), findsOneWidget);
+  });
+
+  testWidgets('merges nearby reports into one larger CircleMarker and cluster badge that opens ClusterDetailBottomSheet', (tester) async {
+    final repo = _CountingRepository();
+    final auth = FakeAuthService(uid: 'voter-uid');
+    await repo.submitReport(
+      uid: 'u1',
+      intensity: RainIntensity.light,
+      rawLat: -6.2000,
+      rawLng: 106.8166,
+      note: 'Drizzling',
+    );
+    await repo.submitReport(
+      uid: 'u2',
+      intensity: RainIntensity.storm,
+      rawLat: -6.2000,
+      rawLng: 106.8166,
+      note: 'Thunderstorm',
+    );
+
+    await tester.pumpWidget(
+      RainReporterApp(
+        authService: auth,
+        repository: repo,
+        useNativeMapView: false,
+        locationProvider: () async => (lat: -6.2000, lng: 106.8166),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final circleLayer = tester.widget<CircleLayer>(find.byType(CircleLayer));
+    expect(circleLayer.circles, hasLength(1));
+    expect(circleLayer.circles.single.useRadiusInMeter, isTrue);
+    expect(circleLayer.circles.single.radius, greaterThan(300));
+
+    expect(find.byIcon(Icons.location_on), findsNothing);
+    expect(find.text('2'), findsOneWidget);
+
+    await tester.tap(find.text('2'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ClusterDetailBottomSheet), findsOneWidget);
+    expect(find.text('2 reports'), findsOneWidget);
+
+    await tester.tap(find.text('Still raining').first);
+    await tester.pumpAndSettle();
+
+    final active = await repo
+        .watchActiveReports(centerLat: -6.2000, centerLng: 106.8166)
+        .first;
+    expect(active.any((r) => r.confirmCount == 2), isTrue);
+  });
+
+  testWidgets('keeps distant reports (>600m apart) as separate CircleMarkers and individual pins', (tester) async {
+    final repo = _CountingRepository();
+    final auth = FakeAuthService(uid: 'test-uid');
+    await repo.submitReport(
+      uid: 'u1',
+      intensity: RainIntensity.moderate,
+      rawLat: -6.2000,
+      rawLng: 106.8166,
+    );
+    // ~2km south (well outside 600m merge threshold)
+    await repo.submitReport(
+      uid: 'u2',
+      intensity: RainIntensity.heavy,
+      rawLat: -6.2180,
+      rawLng: 106.8166,
+    );
+
+    await tester.pumpWidget(
+      RainReporterApp(
+        authService: auth,
+        repository: repo,
+        useNativeMapView: false,
+        locationProvider: () async => (lat: -6.2000, lng: 106.8166),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final circleLayer = tester.widget<CircleLayer>(find.byType(CircleLayer));
+    expect(circleLayer.circles, hasLength(2));
+    expect(find.byIcon(Icons.location_on), findsNWidgets(2));
   });
 }
