@@ -514,6 +514,24 @@ void main() {
     expect(mapWidget.mapController!.camera.center.latitude, closeTo(-6.9000, 0.0001));
     expect(mapWidget.mapController!.camera.center.longitude, closeTo(107.6000, 0.0001));
   });
+
+  testWidgets('shows offline mode banner when isOfflineMode is true', (tester) async {
+    final repo = _CountingRepository();
+    final auth = FakeAuthService(uid: 'test-uid');
+
+    await tester.pumpWidget(
+      RainReporterApp(
+        authService: auth,
+        repository: repo,
+        useNativeMapView: false,
+        isOfflineMode: true,
+        locationProvider: () async => (lat: -6.9175, lng: 107.6191),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Offline mode (local only)'), findsOneWidget);
+  });
 }
 
 class _CustomStreamRepository extends InMemoryRainReportRepository {

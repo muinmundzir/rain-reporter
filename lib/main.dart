@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'data/auth_service.dart';
 import 'data/firestore_rain_report_repository.dart';
 import 'data/rain_report_repository.dart';
+import 'firebase_options.dart';
 import 'ui/map_screen.dart';
 
 Future<void> main() async {
@@ -11,12 +12,16 @@ Future<void> main() async {
 
   AuthService authService;
   RainReportRepository repository;
+  var isOfflineMode = false;
 
   try {
-    await Firebase.initializeApp();
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
     authService = FirebaseAuthService();
     repository = FirestoreRainReportRepository();
   } catch (_) {
+    isOfflineMode = true;
     authService = FakeAuthService();
     repository = InMemoryRainReportRepository();
   }
@@ -25,6 +30,7 @@ Future<void> main() async {
     RainReporterApp(
       authService: authService,
       repository: repository,
+      isOfflineMode: isOfflineMode,
     ),
   );
 }
@@ -36,12 +42,14 @@ class RainReporterApp extends StatelessWidget {
     required this.repository,
     this.locationProvider,
     this.useNativeMapView = true,
+    this.isOfflineMode = false,
   });
 
   final AuthService authService;
   final RainReportRepository repository;
   final Future<({double lat, double lng})?> Function()? locationProvider;
   final bool useNativeMapView;
+  final bool isOfflineMode;
 
   @override
   Widget build(BuildContext context) {
@@ -56,6 +64,7 @@ class RainReporterApp extends StatelessWidget {
         repository: repository,
         locationProvider: locationProvider,
         useNativeMapView: useNativeMapView,
+        isOfflineMode: isOfflineMode,
       ),
     );
   }

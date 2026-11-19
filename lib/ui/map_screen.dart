@@ -22,6 +22,7 @@ class MapScreen extends StatefulWidget {
     required this.repository,
     this.locationProvider,
     this.useNativeMapView = true,
+    this.isOfflineMode = false,
     this.clock,
     this.panDebounceDuration = const Duration(milliseconds: 400),
     this.panRefreshThresholdMeters = 500,
@@ -31,6 +32,7 @@ class MapScreen extends StatefulWidget {
   final RainReportRepository repository;
   final Future<({double lat, double lng})?> Function()? locationProvider;
   final bool useNativeMapView;
+  final bool isOfflineMode;
   final DateTime Function()? clock;
   final Duration panDebounceDuration;
   final double panRefreshThresholdMeters;
@@ -471,22 +473,56 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               ),
             ],
           ),
-          body: FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: LatLng(_cameraCenter.lat, _cameraCenter.lng),
-              initialZoom: _defaultOverviewZoom,
-              onPositionChanged: (camera, _) => _onMapPositionChanged(camera),
-            ),
+          body: Stack(
             children: [
-              if (widget.useNativeMapView)
-                TileLayer(
-                  urlTemplate:
-                      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
-                  userAgentPackageName: 'com.example.rainreporter.rain_reporter',
+              FlutterMap(
+                mapController: _mapController,
+                options: MapOptions(
+                  initialCenter: LatLng(_cameraCenter.lat, _cameraCenter.lng),
+                  initialZoom: _defaultOverviewZoom,
+                  onPositionChanged: (camera, _) => _onMapPositionChanged(camera),
                 ),
-              CircleLayer(circles: circles),
-              MarkerLayer(markers: markers),
+                children: [
+                  if (widget.useNativeMapView)
+                    TileLayer(
+                      urlTemplate:
+                          'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+                      userAgentPackageName:
+                          'com.example.rainreporter.rain_reporter',
+                    ),
+                  CircleLayer(circles: circles),
+                  MarkerLayer(markers: markers),
+                ],
+              ),
+              if (widget.isOfflineMode)
+                Positioned(
+                  top: 8,
+                  left: 12,
+                  right: 12,
+                  child: Material(
+                    color: Colors.amber.shade100,
+                    borderRadius: BorderRadius.circular(8),
+                    elevation: 2,
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.cloud_off, size: 18),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Offline mode (local only)',
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
           floatingActionButton: Column(
