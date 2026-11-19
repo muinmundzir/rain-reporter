@@ -49,6 +49,7 @@ class _MapScreenState extends State<MapScreen> {
   ({double lat, double lng}) _lastQueriedCenter = _defaultCenter;
   final MapController _mapController = MapController();
   late Stream<List<RainReport>> _reportsStream;
+  List<RainReport> _latestReports = const <RainReport>[];
   Timer? _panDebounceTimer;
   bool _isOpeningReportSheet = false;
 
@@ -261,8 +262,12 @@ class _MapScreenState extends State<MapScreen> {
   Widget build(BuildContext context) {
     return StreamBuilder<List<RainReport>>(
       stream: _reportsStream,
+      initialData: _latestReports,
       builder: (context, snapshot) {
-        final reports = snapshot.data ?? const <RainReport>[];
+        if (snapshot.hasData) {
+          _latestReports = snapshot.data!;
+        }
+        final reports = _latestReports;
         final clusters = RainClusterer.cluster(reports);
         final circles = clusters.map((cluster) {
           final color = _colorForIntensity(cluster.strongestIntensity);
@@ -358,7 +363,10 @@ class _MapScreenState extends State<MapScreen> {
             children: [
               if (widget.useNativeMapView)
                 TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  urlTemplate:
+                      'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+                  subdomains: const ['a', 'b', 'c', 'd'],
+                  retinaMode: RetinaMode.isHighDensity(context),
                   userAgentPackageName: 'com.example.rainreporter.rain_reporter',
                 ),
               CircleLayer(circles: circles),

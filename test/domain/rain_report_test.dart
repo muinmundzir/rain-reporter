@@ -103,4 +103,23 @@ void main() {
     expect(rules, contains("duration.value(28, 'm')"));
     expect(rules, contains("duration.value(32, 'm')"));
   });
+
+  test('RainReport.fromMap handles null createdAt from pending Firestore serverTimestamp', () {
+    final expiresAt = t0.add(const Duration(minutes: 30));
+    final report = RainReport.fromMap('pending-1', {
+      'uid': 'u1',
+      'intensity': 'heavy',
+      'lat': -6.9175,
+      'lng': 107.6191,
+      'geohash': 'qqv3r8p',
+      'confirmCount': 1,
+      'stoppedCount': 0,
+      'createdAt': null,
+      'expiresAt': expiresAt,
+    });
+
+    expect(report.id, equals('pending-1'));
+    expect(report.createdAt, equals(t0));
+    expect(report.expiresAt, equals(expiresAt));
+  });
 }

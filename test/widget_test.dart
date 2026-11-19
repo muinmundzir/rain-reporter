@@ -431,4 +431,70 @@ void main() {
     expect(circleLayer.circles, hasLength(2));
     expect(find.byIcon(Icons.location_on), findsNWidgets(2));
   });
+
+  testWidgets('preserves previous reports without flickering to 0 while refreshed stream is waiting', (tester) async {
+    final controller1 = StreamController<List<RainReport>>.broadcast();
+    final controller2 = StreamController<List<RainReport>>.broadcast();
+    addTearDown(() async {
+      await controller1.close();
+      await controller2.close();
+    });
+    var watchCall = 0;
+
+    final repo = _CustomStreamRepository((lat, lng) {
+      watchCall++;
+      return watchCall == 1 ? controller1.stream : controller2.stream;
+    });
+    final auth = FakeAuthService(uid: 'test-uid');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MapScreen(
+          authService: auth,
+          repository: repo,
+          useNativeMapView: false,
+          locationProvider: () async => (lat: -6.9175, lng: 107.6191),
+          panDebounceDuration: const Duration(milliseconds: 100),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    controller1.add([
+      RainReport.create(
+        id: 'r1',
+        uid: 'u1',
+        intensity: RainIntensity.heavy,
+        lat: -6.9175,
+        lng: 107.6191,
+        createdAt: DateTime.now().toUtc(),
+      ),
+    ]);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('1 active nearby'), findsOneWidget);
+
+    // Pan >500m to trigger a new stream that has not emitted yet
+    final mapWidget = tester.widget<FlutterMap>(find.byType(FlutterMap));
+    mapWidget.mapController!.move(const LatLng(-6.9300, 107.6191), 14);
+    await tester.pump(const Duration(milliseconds: 150));
+
+    // Must still display 1 active nearby instead of flickering to 0 while waiting
+    expect(find.text('1 active nearby'), findsOneWidget);
+  });
+}
+
+class _CustomStreamRepository extends InMemoryRainReportRepository {
+  _CustomStreamRepository(this._streamFactory);
+
+  final Stream<List<RainReport>> Function(double lat, double lng) _streamFactory;
+
+  @override
+  Stream<List<RainReport>> watchActiveReports({
+    required double centerLat,
+    required double centerLng,
+    double radiusMeters = 10000,
+  }) {
+    return _streamFactory(centerLat, centerLng);
+  }
 }

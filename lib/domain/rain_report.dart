@@ -65,6 +65,11 @@ class RainReport {
     final lat = (map['lat'] as num).toDouble();
     final lng = (map['lng'] as num).toDouble();
 
+    final expiresAt = parseTime(map['expiresAt']);
+    final createdAt = map['createdAt'] == null
+        ? expiresAt.subtract(const Duration(minutes: 30))
+        : parseTime(map['createdAt']);
+
     return RainReport(
       id: id,
       uid: map['uid'] as String? ?? '',
@@ -75,8 +80,8 @@ class RainReport {
       geohash: map['geohash'] as String? ?? LocationPrivacy.encodeGeohash(lat, lng),
       confirmCount: (map['confirmCount'] as num?)?.toInt() ?? 1,
       stoppedCount: (map['stoppedCount'] as num?)?.toInt() ?? 0,
-      createdAt: parseTime(map['createdAt']),
-      expiresAt: parseTime(map['expiresAt']),
+      createdAt: createdAt,
+      expiresAt: expiresAt,
     );
   }
 

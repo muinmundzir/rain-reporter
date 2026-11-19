@@ -184,8 +184,11 @@ service cloud.firestore {
     // ===============================================================
 
     match /reports/{reportId} {
-      // Only serve reports that have not yet expired (30-minute window)
-      allow read: if resource.data.expiresAt > request.time;
+      // Reports are public, fuzzed 100-200m, and contain no PII; active window is filtered
+      // client-side and expired documents are cleaned up by Firestore TTL. Avoiding
+      // request.time here prevents live .snapshots() listeners from failing with
+      // PERMISSION_DENIED on client clock skew or reconnects.
+      allow read: if true;
 
       allow create: if isAuthenticated() &&
         isValidReport(request.resource.data) &&
