@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -274,5 +276,41 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 300));
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('ignores duplicate Report Rain taps while GPS lookup is in flight', (tester) async {
+    final repo = _CountingRepository();
+    final auth = FakeAuthService(uid: 'test-uid');
+    var calls = 0;
+    final pendingGps = Completer<({double lat, double lng})?>();
+
+    await tester.pumpWidget(
+      RainReporterApp(
+        authService: auth,
+        repository: repo,
+        useNativeMapView: false,
+        locationProvider: () {
+          calls++;
+          if (calls == 1) {
+            return Future.value((lat: -6.2000, lng: 106.8166));
+          }
+          return pendingGps.future;
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Tap Report Rain twice while GPS lookup is pending
+    await tester.tap(find.text('Report Rain'));
+    await tester.pump();
+    await tester.tap(find.text('Report Rain'));
+    await tester.pump();
+
+    expect(calls, equals(2));
+
+    pendingGps.complete((lat: -6.2000, lng: 106.8166));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Submit Report'), findsOneWidget);
   });
 }

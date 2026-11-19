@@ -48,6 +48,7 @@ class _MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
   late Stream<List<RainReport>> _reportsStream;
   Timer? _panDebounceTimer;
+  bool _isOpeningReportSheet = false;
 
   @override
   void initState() {
@@ -144,49 +145,55 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Future<void> _openReportSheet() async {
-    final loc = await _fetchDeviceLocation();
-    if (!mounted) return;
-    if (loc == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Location access is required to report rain.'),
+    if (_isOpeningReportSheet) return;
+    _isOpeningReportSheet = true;
+    try {
+      final loc = await _fetchDeviceLocation();
+      if (!mounted) return;
+      if (loc == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Location access is required to report rain.'),
+          ),
+        );
+        return;
+      }
+
+      final submission = await showModalBottomSheet<ReportSubmission>(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => ReportBottomSheet(
+          onSubmit: (value) => Navigator.of(ctx).pop(value),
         ),
       );
-      return;
-    }
+      if (submission == null || !mounted) return;
 
-    final submission = await showModalBottomSheet<ReportSubmission>(
-      context: context,
-      isScrollControlled: true,
-      builder: (ctx) => ReportBottomSheet(
-        onSubmit: (value) => Navigator.of(ctx).pop(value),
-      ),
-    );
-    if (submission == null || !mounted) return;
-
-    try {
-      final uid = await widget.authService.ensureAnonymousUid();
-      await widget.repository.submitReport(
-        uid: uid,
-        intensity: submission.intensity,
-        rawLat: loc.lat,
-        rawLng: loc.lng,
-        note: submission.note,
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Rain report submitted!')),
-      );
-    } on RateLimitException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not submit report: $e')),
-      );
+      try {
+        final uid = await widget.authService.ensureAnonymousUid();
+        await widget.repository.submitReport(
+          uid: uid,
+          intensity: submission.intensity,
+          rawLat: loc.lat,
+          rawLng: loc.lng,
+          note: submission.note,
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Rain report submitted!')),
+        );
+      } on RateLimitException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not submit report: $e')),
+        );
+      }
+    } finally {
+      _isOpeningReportSheet = false;
     }
   }
 
