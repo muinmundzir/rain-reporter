@@ -22,7 +22,7 @@ class MapScreen extends StatefulWidget {
 
   final AuthService authService;
   final RainReportRepository repository;
-  final Future<({double lat, double lng})> Function()? locationProvider;
+  final Future<({double lat, double lng})?> Function()? locationProvider;
   final bool useNativeMapView;
   final DateTime Function()? clock;
 
@@ -36,7 +36,7 @@ class _MapScreenState extends State<MapScreen> {
     lng: 106.816666,
   );
 
-  ({double lat, double lng}) _center = _defaultCenter;
+  ({double lat, double lng}) _cameraCenter = _defaultCenter;
   final MapController _mapController = MapController();
   late Stream<List<RainReport>> _reportsStream;
 
@@ -44,37 +44,43 @@ class _MapScreenState extends State<MapScreen> {
   void initState() {
     super.initState();
     _reportsStream = widget.repository.watchActiveReports(
-      centerLat: _center.lat,
-      centerLng: _center.lng,
+      centerLat: _cameraCenter.lat,
+      centerLng: _cameraCenter.lng,
     );
     _initLocation();
   }
 
   void _updateCenter(({double lat, double lng}) newCenter) {
-    if (newCenter.lat == _center.lat && newCenter.lng == _center.lng) return;
+    if (newCenter.lat == _cameraCenter.lat && newCenter.lng == _cameraCenter.lng) {
+      return;
+    }
     setState(() {
-      _center = newCenter;
+      _cameraCenter = newCenter;
       _reportsStream = widget.repository.watchActiveReports(
-        centerLat: _center.lat,
-        centerLng: _center.lng,
+        centerLat: _cameraCenter.lat,
+        centerLng: _cameraCenter.lng,
       );
     });
   }
 
-  Future<void> _initLocation() async {
+  Future<({double lat, double lng})?> _fetchDeviceLocation() async {
     try {
-      final loc = await (widget.locationProvider ?? _resolveDeviceLocation)();
-      if (!mounted) return;
-      _updateCenter(loc);
-      _mapController.move(LatLng(loc.lat, loc.lng), 14);
+      return await (widget.locationProvider ?? _resolveDeviceLocation)();
     } catch (_) {
-      // Fall back to default center when location permission/service is unavailable
+      return null;
     }
   }
 
-  Future<({double lat, double lng})> _resolveDeviceLocation() async {
+  Future<void> _initLocation() async {
+    final loc = await _fetchDeviceLocation();
+    if (!mounted || loc == null) return;
+    _updateCenter(loc);
+    _mapController.move(LatLng(loc.lat, loc.lng), 14);
+  }
+
+  Future<({double lat, double lng})?> _resolveDeviceLocation() async {
     final enabled = await Geolocator.isLocationServiceEnabled();
-    if (!enabled) return _defaultCenter;
+    if (!enabled) return null;
 
     var permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
@@ -82,7 +88,7 @@ class _MapScreenState extends State<MapScreen> {
     }
     if (permission == LocationPermission.denied ||
         permission == LocationPermission.deniedForever) {
-      return _defaultCenter;
+      return null;
     }
 
     final pos = await Geolocator.getCurrentPosition();
@@ -100,6 +106,17 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Future<void> _openReportSheet() async {
+    final loc = await _fetchDeviceLocation();
+    if (!mounted) return;
+    if (loc == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Location access is required to report rain.'),
+        ),
+      );
+      return;
+    }
+
     final submission = await showModalBottomSheet<ReportSubmission>(
       context: context,
       isScrollControlled: true,
@@ -114,8 +131,8 @@ class _MapScreenState extends State<MapScreen> {
       await widget.repository.submitReport(
         uid: uid,
         intensity: submission.intensity,
-        rawLat: _center.lat,
-        rawLng: _center.lng,
+        rawLat: loc.lat,
+        rawLng: loc.lng,
         note: submission.note,
       );
       if (!mounted) return;
@@ -214,10 +231,10 @@ class _MapScreenState extends State<MapScreen> {
           body: FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter: LatLng(_center.lat, _center.lng),
+              initialCenter: LatLng(_cameraCenter.lat, _cameraCenter.lng),
               initialZoom: 14,
               onPositionChanged: (camera, _) {
-                _center = (
+                _cameraCenter = (
                   lat: camera.center.latitude,
                   lng: camera.center.longitude,
                 );

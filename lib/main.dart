@@ -40,7 +40,7 @@ class RainReporterApp extends StatelessWidget {
 
   final AuthService authService;
   final RainReportRepository repository;
-  final Future<({double lat, double lng})> Function()? locationProvider;
+  final Future<({double lat, double lng})?> Function()? locationProvider;
   final bool useNativeMapView;
 
   @override
