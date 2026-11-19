@@ -41,8 +41,8 @@ class MapScreen extends StatefulWidget {
 
 class _MapScreenState extends State<MapScreen> {
   static const ({double lat, double lng}) _defaultCenter = (
-    lat: -6.200000,
-    lng: 106.816666,
+    lat: -6.917500,
+    lng: 107.619100,
   );
 
   ({double lat, double lng}) _cameraCenter = _defaultCenter;
