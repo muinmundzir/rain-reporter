@@ -275,9 +275,9 @@ class _MapScreenState extends State<MapScreen> {
             point: LatLng(cluster.centerLat, cluster.centerLng),
             radius: cluster.radiusMeters,
             useRadiusInMeter: true,
-            color: color.withValues(alpha: 0.22),
-            borderColor: color.withValues(alpha: 0.6),
-            borderStrokeWidth: 1.5,
+            color: color.withValues(alpha: 0.28),
+            borderColor: color.withValues(alpha: 0.75),
+            borderStrokeWidth: 2,
           );
         }).toList();
 
@@ -364,9 +364,7 @@ class _MapScreenState extends State<MapScreen> {
               if (widget.useNativeMapView)
                 TileLayer(
                   urlTemplate:
-                      'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-                  subdomains: const ['a', 'b', 'c', 'd'],
-                  retinaMode: RetinaMode.isHighDensity(context),
+                      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
                   userAgentPackageName: 'com.example.rainreporter.rain_reporter',
                 ),
               CircleLayer(circles: circles),
