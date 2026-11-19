@@ -51,11 +51,9 @@ class InMemoryRainReportRepository implements RainReportRepository {
   InMemoryRainReportRepository({
     DateTime Function()? clock,
     Random? random,
-  })  : _clock = clock ?? (() => DateTime.now().toUtc()),
-        _random = random ?? Random(42);
+  }) : _clock = clock ?? (() => DateTime.now().toUtc());
 
   final DateTime Function() _clock;
-  final Random _random;
   final List<RainReport> _reports = [];
   final Map<String, DateTime> _lastReportByUid = {};
   final Set<String> _votes = {};
@@ -114,19 +112,13 @@ class InMemoryRainReportRepository implements RainReportRepository {
       throw const RateLimitException();
     }
 
-    final fuzzed = LocationPrivacy.fuzzCoordinate(
-      lat: rawLat,
-      lng: rawLng,
-      random: _random,
-    );
-
     final report = RainReport.create(
       id: 'report-${_nextId++}',
       uid: uid,
       intensity: intensity,
       note: note,
-      lat: fuzzed.lat,
-      lng: fuzzed.lng,
+      lat: rawLat,
+      lng: rawLng,
       createdAt: now,
     );
 

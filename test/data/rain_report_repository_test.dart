@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rain_reporter/data/rain_report_repository.dart';
-import 'package:rain_reporter/domain/location_privacy.dart';
 import 'package:rain_reporter/domain/rain_intensity.dart';
 
 void main() {
@@ -12,7 +11,7 @@ void main() {
     repo = InMemoryRainReportRepository(clock: () => currentTime);
   });
 
-  test('submitReport fuzzes coordinates (100-200m) and emits active report', () async {
+  test('submitReport uses exact coordinates and emits active report', () async {
     final report = await repo.submitReport(
       uid: 'user-1',
       intensity: RainIntensity.heavy,
@@ -21,8 +20,8 @@ void main() {
       note: 'Pouring near station',
     );
 
-    final dist = LocationPrivacy.distanceMeters(-6.2000, 106.8166, report.lat, report.lng);
-    expect(dist, inInclusiveRange(100.0, 200.5));
+    expect(report.lat, equals(-6.2000));
+    expect(report.lng, equals(106.8166));
 
     final active = await repo.watchActiveReports(centerLat: -6.2000, centerLng: 106.8166).first;
     expect(active.length, 1);

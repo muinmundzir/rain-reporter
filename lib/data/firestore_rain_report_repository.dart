@@ -55,7 +55,6 @@ class FirestoreRainReportRepository implements RainReportRepository {
     required double rawLng,
     String? note,
   }) async {
-    final fuzzed = LocationPrivacy.fuzzCoordinate(lat: rawLat, lng: rawLng);
     final now = _clock();
     final docRef = _firestore.collection('reports').doc();
     final rateLimitRef = _firestore.collection('rateLimits').doc(uid);
@@ -65,8 +64,8 @@ class FirestoreRainReportRepository implements RainReportRepository {
       uid: uid,
       intensity: intensity,
       note: note,
-      lat: fuzzed.lat,
-      lng: fuzzed.lng,
+      lat: rawLat,
+      lng: rawLng,
       createdAt: now,
     );
 

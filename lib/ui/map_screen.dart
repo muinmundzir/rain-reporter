@@ -39,18 +39,22 @@ class MapScreen extends StatefulWidget {
   State<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> {
+class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   static const ({double lat, double lng}) _defaultCenter = (
     lat: -6.917500,
     lng: 107.619100,
   );
+  static const double _defaultOverviewZoom = 12.0;
+  static const double _userFocusZoom = 16.0;
 
   ({double lat, double lng}) _cameraCenter = _defaultCenter;
   ({double lat, double lng}) _lastQueriedCenter = _defaultCenter;
+  ({double lat, double lng})? _userLocation;
   final MapController _mapController = MapController();
   late Stream<List<RainReport>> _reportsStream;
   List<RainReport> _latestReports = const <RainReport>[];
   Timer? _panDebounceTimer;
+  AnimationController? _mapMoveController;
   bool _isOpeningReportSheet = false;
 
   @override
@@ -66,6 +70,8 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     _panDebounceTimer?.cancel();
+    _mapMoveController?.dispose();
+    _mapController.dispose();
     super.dispose();
   }
 
@@ -116,8 +122,76 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _initLocation() async {
     final loc = await _fetchDeviceLocation();
     if (!mounted || loc == null) return;
+    setState(() {
+      _userLocation = loc;
+    });
     _refreshReportsForCenter(loc);
-    _mapController.move(LatLng(loc.lat, loc.lng), 14);
+    _animateMapTo(LatLng(loc.lat, loc.lng), _userFocusZoom);
+  }
+
+  void _animateMapTo(LatLng destLocation, double destZoom) {
+    _mapMoveController?.dispose();
+    final controller = AnimationController(
+      duration: const Duration(milliseconds: 550),
+      vsync: this,
+    );
+    _mapMoveController = controller;
+
+    final startCenter = _mapController.camera.center;
+    final startZoom = _mapController.camera.zoom;
+    final latTween = Tween<double>(
+      begin: startCenter.latitude,
+      end: destLocation.latitude,
+    );
+    final lngTween = Tween<double>(
+      begin: startCenter.longitude,
+      end: destLocation.longitude,
+    );
+    final zoomTween = Tween<double>(begin: startZoom, end: destZoom);
+    final animation = CurvedAnimation(
+      parent: controller,
+      curve: Curves.easeOutCubic,
+    );
+
+    controller.addListener(() {
+      _mapController.move(
+        LatLng(
+          latTween.evaluate(animation),
+          lngTween.evaluate(animation),
+        ),
+        zoomTween.evaluate(animation),
+      );
+    });
+
+    controller.addStatusListener((status) {
+      if (status == AnimationStatus.completed ||
+          status == AnimationStatus.dismissed) {
+        if (identical(_mapMoveController, controller)) {
+          _mapMoveController = null;
+        }
+        controller.dispose();
+      }
+    });
+
+    controller.forward();
+  }
+
+  Future<void> _recenterToUserLocation() async {
+    final loc = await _fetchDeviceLocation();
+    if (!mounted) return;
+    if (loc == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Location access is required to center map.'),
+        ),
+      );
+      return;
+    }
+    setState(() {
+      _userLocation = loc;
+    });
+    _refreshReportsForCenter(loc);
+    _animateMapTo(LatLng(loc.lat, loc.lng), _userFocusZoom);
   }
 
   Future<({double lat, double lng})?> _resolveDeviceLocation() async {
@@ -133,8 +207,19 @@ class _MapScreenState extends State<MapScreen> {
       return null;
     }
 
-    final pos = await Geolocator.getCurrentPosition();
-    return (lat: pos.latitude, lng: pos.longitude);
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 8),
+        ),
+      );
+      return (lat: pos.latitude, lng: pos.longitude);
+    } catch (_) {
+      final lastKnown = await Geolocator.getLastKnownPosition();
+      if (lastKnown == null) return null;
+      return (lat: lastKnown.latitude, lng: lastKnown.longitude);
+    }
   }
 
   Color _colorForIntensity(RainIntensity intensity) {
@@ -281,64 +366,97 @@ class _MapScreenState extends State<MapScreen> {
           );
         }).toList();
 
-        final markers = clusters.map((cluster) {
-          final color = _colorForIntensity(cluster.strongestIntensity);
-          if (!cluster.isCluster) {
-            final report = cluster.reports.first;
-            return Marker(
-              point: LatLng(cluster.centerLat, cluster.centerLng),
-              width: 44,
-              height: 44,
-              child: GestureDetector(
-                onTap: () => _openPinDetails(report),
-                child: Tooltip(
-                  message: '${report.intensity.label} Rain',
-                  child: Icon(
-                    Icons.location_on,
-                    size: 40,
-                    color: color,
-                  ),
-                ),
-              ),
-            );
-          }
-
-          return Marker(
-            point: LatLng(cluster.centerLat, cluster.centerLng),
-            width: 44,
-            height: 44,
-            child: GestureDetector(
-              onTap: () => _openClusterDetails(cluster),
-              child: Tooltip(
-                message:
-                    '${cluster.strongestIntensity.label} Rain (${cluster.reports.length} reports)',
+        final markers = <Marker>[
+          if (_userLocation != null)
+            Marker(
+              key: const Key('user_location_marker'),
+              point: LatLng(_userLocation!.lat, _userLocation!.lng),
+              width: 28,
+              height: 28,
+              child: IgnorePointer(
                 child: Container(
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: color,
-                    border: Border.all(color: Colors.white, width: 2),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Colors.black26,
-                        blurRadius: 4,
-                        offset: Offset(0, 2),
-                      ),
-                    ],
+                    color: Colors.blue.withValues(alpha: 0.22),
                   ),
                   alignment: Alignment.center,
-                  child: Text(
-                    '${cluster.reports.length}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
+                  child: Container(
+                    width: 14,
+                    height: 14,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.blue.shade600,
+                      border: Border.all(color: Colors.white, width: 2.5),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 4,
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ),
             ),
-          );
-        }).toList();
+          ...clusters.map((cluster) {
+            final color = _colorForIntensity(cluster.strongestIntensity);
+            if (!cluster.isCluster) {
+              final report = cluster.reports.first;
+              return Marker(
+                point: LatLng(cluster.centerLat, cluster.centerLng),
+                width: 44,
+                height: 44,
+                child: GestureDetector(
+                  onTap: () => _openPinDetails(report),
+                  child: Tooltip(
+                    message: '${report.intensity.label} Rain',
+                    child: Icon(
+                      Icons.location_on,
+                      size: 40,
+                      color: color,
+                    ),
+                  ),
+                ),
+              );
+            }
+
+            return Marker(
+              point: LatLng(cluster.centerLat, cluster.centerLng),
+              width: 44,
+              height: 44,
+              child: GestureDetector(
+                onTap: () => _openClusterDetails(cluster),
+                child: Tooltip(
+                  message:
+                      '${cluster.strongestIntensity.label} Rain (${cluster.reports.length} reports)',
+                  child: Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: color,
+                      border: Border.all(color: Colors.white, width: 2),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 4,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      '${cluster.reports.length}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }),
+        ];
 
         return Scaffold(
           appBar: AppBar(
@@ -357,7 +475,7 @@ class _MapScreenState extends State<MapScreen> {
             mapController: _mapController,
             options: MapOptions(
               initialCenter: LatLng(_cameraCenter.lat, _cameraCenter.lng),
-              initialZoom: 14,
+              initialZoom: _defaultOverviewZoom,
               onPositionChanged: (camera, _) => _onMapPositionChanged(camera),
             ),
             children: [
@@ -371,10 +489,25 @@ class _MapScreenState extends State<MapScreen> {
               MarkerLayer(markers: markers),
             ],
           ),
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: _openReportSheet,
-            icon: const Icon(Icons.add_location_alt),
-            label: const Text('Report Rain'),
+          floatingActionButton: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              FloatingActionButton.small(
+                key: const Key('recenter_button'),
+                heroTag: 'recenter_fab',
+                onPressed: _recenterToUserLocation,
+                tooltip: 'My location',
+                child: const Icon(Icons.my_location),
+              ),
+              const SizedBox(height: 12),
+              FloatingActionButton.extended(
+                heroTag: 'report_rain_fab',
+                onPressed: _openReportSheet,
+                icon: const Icon(Icons.add_location_alt),
+                label: const Text('Report Rain'),
+              ),
+            ],
           ),
         );
       },

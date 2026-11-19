@@ -409,12 +409,12 @@ void main() {
       rawLat: -6.2000,
       rawLng: 106.8166,
     );
-    // ~2km south (well outside 600m merge threshold)
+    // ~830m east (outside 600m merge threshold, visible at zoom 16)
     await repo.submitReport(
       uid: 'u2',
       intensity: RainIntensity.heavy,
-      rawLat: -6.2180,
-      rawLng: 106.8166,
+      rawLat: -6.2000,
+      rawLng: 106.8241,
     );
 
     await tester.pumpWidget(
@@ -481,6 +481,38 @@ void main() {
 
     // Must still display 1 active nearby instead of flickering to 0 while waiting
     expect(find.text('1 active nearby'), findsOneWidget);
+  });
+
+  testWidgets('animates zoom to 16 at user location, shows user dot, and recenters on tap', (tester) async {
+    final repo = _CountingRepository();
+    final auth = FakeAuthService(uid: 'test-uid');
+
+    await tester.pumpWidget(
+      RainReporterApp(
+        authService: auth,
+        repository: repo,
+        useNativeMapView: false,
+        locationProvider: () async => (lat: -6.9000, lng: 107.6000),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final mapWidget = tester.widget<FlutterMap>(find.byType(FlutterMap));
+    expect(mapWidget.mapController!.camera.zoom, closeTo(16.0, 0.01));
+    expect(mapWidget.mapController!.camera.center.latitude, closeTo(-6.9000, 0.0001));
+    expect(mapWidget.mapController!.camera.center.longitude, closeTo(107.6000, 0.0001));
+    expect(find.byKey(const Key('user_location_marker')), findsOneWidget);
+
+    // Pan away, then tap recenter button
+    mapWidget.mapController!.move(const LatLng(-6.9500, 107.6500), 13);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('recenter_button')));
+    await tester.pumpAndSettle();
+
+    expect(mapWidget.mapController!.camera.zoom, closeTo(16.0, 0.01));
+    expect(mapWidget.mapController!.camera.center.latitude, closeTo(-6.9000, 0.0001));
+    expect(mapWidget.mapController!.camera.center.longitude, closeTo(107.6000, 0.0001));
   });
 }
 
