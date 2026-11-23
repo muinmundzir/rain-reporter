@@ -91,6 +91,7 @@ class _MapScreenState extends State<MapScreen> {
   Cancelable? _annotationTapCancelable;
   bool _styleLoaded = false;
   int _annotationSyncGeneration = 0;
+  String? _lastSyncedFingerprint;
   final Map<String, RainCluster> _annotationClusters = {};
   final MapboxMarkerIcons _markerIcons = MapboxMarkerIcons();
 
@@ -165,6 +166,7 @@ class _MapScreenState extends State<MapScreen> {
     widget.mapTestController?.hasUserLocation = true;
     _refreshReportsForCenter(loc);
     _animateMapTo(loc.lat, loc.lng, _userFocusZoom);
+    unawaited(_enableLocationPuck());
   }
 
   void _animateMapTo(double lat, double lng, double zoom) {
@@ -200,6 +202,7 @@ class _MapScreenState extends State<MapScreen> {
     widget.mapTestController?.hasUserLocation = true;
     _refreshReportsForCenter(loc);
     _animateMapTo(loc.lat, loc.lng, _userFocusZoom);
+    unawaited(_enableLocationPuck());
   }
 
   Future<({double lat, double lng})?> _resolveDeviceLocation() async {
@@ -230,9 +233,9 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  Future<void> _onMapCreated(MapboxMap mapboxMap) async {
-    _mapboxMap = mapboxMap;
-
+  Future<void> _enableLocationPuck() async {
+    final mapboxMap = _mapboxMap;
+    if (!mounted || mapboxMap == null) return;
     try {
       await mapboxMap.location.updateSettings(
         LocationComponentSettings(
@@ -243,6 +246,12 @@ class _MapScreenState extends State<MapScreen> {
     } catch (_) {
       // Location puck requires runtime location permission; safe to ignore if denied.
     }
+  }
+
+  Future<void> _onMapCreated(MapboxMap mapboxMap) async {
+    _mapboxMap = mapboxMap;
+    await _enableLocationPuck();
+    if (!mounted) return;
 
     final manager = await mapboxMap.annotations.createPointAnnotationManager();
     if (!mounted) return;
@@ -263,6 +272,7 @@ class _MapScreenState extends State<MapScreen> {
       _animateMapTo(_userLocation!.lat, _userLocation!.lng, _userFocusZoom);
     }
     if (_styleLoaded) {
+      _lastSyncedFingerprint = null;
       await _syncMapboxLayers(_latestClusters);
     }
   }
@@ -306,12 +316,44 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     _styleLoaded = true;
+    _lastSyncedFingerprint = null;
     await _syncMapboxLayers(_latestClusters);
+  }
+
+  String _clustersFingerprint(List<RainCluster> clusters) {
+    final buffer = StringBuffer();
+    for (final c in clusters) {
+      buffer
+        ..write(c.centerLat.toStringAsFixed(6))
+        ..write(',')
+        ..write(c.centerLng.toStringAsFixed(6))
+        ..write(',')
+        ..write(c.radiusMeters.toStringAsFixed(1))
+        ..write(',')
+        ..write(c.strongestIntensity.wireName)
+        ..write(',')
+        ..write(c.reports.length)
+        ..write(':');
+      for (final r in c.reports) {
+        buffer
+          ..write(r.id)
+          ..write('#')
+          ..write(r.confirmCount)
+          ..write('#')
+          ..write(r.stoppedCount)
+          ..write(';');
+      }
+    }
+    return buffer.toString();
   }
 
   Future<void> _syncMapboxLayers(List<RainCluster> clusters) async {
     final mapboxMap = _mapboxMap;
     if (!mounted || mapboxMap == null || !_styleLoaded) return;
+
+    final fingerprint = _clustersFingerprint(clusters);
+    if (fingerprint == _lastSyncedFingerprint) return;
+    _lastSyncedFingerprint = fingerprint;
 
     final generation = ++_annotationSyncGeneration;
 
@@ -358,17 +400,25 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     if (generation != _annotationSyncGeneration || !mounted) return;
-    await manager.deleteAll();
-    _annotationClusters.clear();
+    try {
+      await manager.deleteAll();
+      if (generation != _annotationSyncGeneration || !mounted) return;
+      _annotationClusters.clear();
 
-    if (options.isEmpty) return;
-    final created = await manager.createMulti(options);
-    if (generation != _annotationSyncGeneration || !mounted) return;
+      if (options.isEmpty) return;
+      final created = await manager.createMulti(options);
+      if (generation != _annotationSyncGeneration || !mounted) return;
 
-    for (var i = 0; i < created.length && i < clusters.length; i++) {
-      final annotation = created[i];
-      if (annotation != null) {
-        _annotationClusters[annotation.id] = clusters[i];
+      for (var i = 0; i < created.length && i < clusters.length; i++) {
+        final annotation = created[i];
+        if (annotation != null) {
+          _annotationClusters[annotation.id] = clusters[i];
+        }
+      }
+    } catch (_) {
+      // Reset fingerprint so next stream update retries syncing annotations.
+      if (generation == _annotationSyncGeneration) {
+        _lastSyncedFingerprint = null;
       }
     }
   }
