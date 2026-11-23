@@ -1,5 +1,6 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 import 'data/auth_service.dart';
 import 'data/firestore_rain_report_repository.dart';
@@ -9,6 +10,11 @@ import 'ui/map_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  const mapboxToken = String.fromEnvironment('MAPBOX_ACCESS_TOKEN');
+  if (mapboxToken.isNotEmpty) {
+    MapboxOptions.setAccessToken(mapboxToken);
+  }
 
   AuthService authService;
   RainReportRepository repository;
