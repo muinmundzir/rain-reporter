@@ -49,6 +49,7 @@ class RainReporterApp extends StatelessWidget {
     this.locationProvider,
     this.useNativeMapView = true,
     this.isOfflineMode = false,
+    this.mapTestController,
   });
 
   final AuthService authService;
@@ -56,6 +57,7 @@ class RainReporterApp extends StatelessWidget {
   final Future<({double lat, double lng})?> Function()? locationProvider;
   final bool useNativeMapView;
   final bool isOfflineMode;
+  final MapTestController? mapTestController;
 
   @override
   Widget build(BuildContext context) {
@@ -71,6 +73,7 @@ class RainReporterApp extends StatelessWidget {
         locationProvider: locationProvider,
         useNativeMapView: useNativeMapView,
         isOfflineMode: isOfflineMode,
+        mapTestController: mapTestController,
       ),
     );
   }

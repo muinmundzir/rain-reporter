@@ -1,9 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:geolocator/geolocator.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:geolocator/geolocator.dart' as geo;
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 import '../data/auth_service.dart';
 import '../data/rain_report_repository.dart';
@@ -11,9 +10,30 @@ import '../domain/location_privacy.dart';
 import '../domain/rain_cluster.dart';
 import '../domain/rain_intensity.dart';
 import '../domain/rain_report.dart';
+import '../domain/rain_zone_geojson.dart';
 import 'cluster_detail_bottom_sheet.dart';
+import 'mapbox_marker_icons.dart';
 import 'pin_detail_bottom_sheet.dart';
 import 'report_bottom_sheet.dart';
+
+/// Lightweight controller exposed only when `useNativeMapView == false`
+/// so headless `flutter test` suites can inspect camera state and simulate pans.
+class MapTestController {
+  double centerLat = -6.917500;
+  double centerLng = 107.619100;
+  double zoom = 12.0;
+  bool hasUserLocation = false;
+  List<RainCluster> clusters = const [];
+
+  void Function(double lat, double lng, double zoom)? _onSimulatedMove;
+
+  void simulateCameraMove(double lat, double lng, double newZoom) {
+    centerLat = lat;
+    centerLng = lng;
+    zoom = newZoom;
+    _onSimulatedMove?.call(lat, lng, newZoom);
+  }
+}
 
 class MapScreen extends StatefulWidget {
   const MapScreen({
@@ -27,6 +47,7 @@ class MapScreen extends StatefulWidget {
     this.panDebounceDuration = const Duration(milliseconds: 400),
     this.panRefreshThresholdMeters = 500,
     this.stopVoteMaxDistanceMeters = 500,
+    this.mapTestController,
   });
 
   final AuthService authService;
@@ -38,12 +59,13 @@ class MapScreen extends StatefulWidget {
   final Duration panDebounceDuration;
   final double panRefreshThresholdMeters;
   final double stopVoteMaxDistanceMeters;
+  final MapTestController? mapTestController;
 
   @override
   State<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
+class _MapScreenState extends State<MapScreen> {
   static const ({double lat, double lng}) _defaultCenter = (
     lat: -6.917500,
     lng: 107.619100,
@@ -51,19 +73,33 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   static const double _defaultOverviewZoom = 12.0;
   static const double _userFocusZoom = 16.0;
 
+  static const String _rainZonesSourceId = 'rain-zones-source';
+  static const String _rainZonesFillLayerId = 'rain-zones-fill';
+  static const String _rainZonesLineLayerId = 'rain-zones-line';
+
   ({double lat, double lng}) _cameraCenter = _defaultCenter;
   ({double lat, double lng}) _lastQueriedCenter = _defaultCenter;
   ({double lat, double lng})? _userLocation;
-  final MapController _mapController = MapController();
   late Stream<List<RainReport>> _reportsStream;
   List<RainReport> _latestReports = const <RainReport>[];
+  List<RainCluster> _latestClusters = const <RainCluster>[];
   Timer? _panDebounceTimer;
-  AnimationController? _mapMoveController;
   bool _isOpeningReportSheet = false;
+
+  MapboxMap? _mapboxMap;
+  PointAnnotationManager? _pointAnnotationManager;
+  Cancelable? _annotationTapCancelable;
+  bool _styleLoaded = false;
+  int _annotationSyncGeneration = 0;
+  final Map<String, RainCluster> _annotationClusters = {};
+  final MapboxMarkerIcons _markerIcons = MapboxMarkerIcons();
 
   @override
   void initState() {
     super.initState();
+    widget.mapTestController?._onSimulatedMove = (lat, lng, _) {
+      _onCameraCenterChanged(lat, lng);
+    };
     _reportsStream = widget.repository.watchActiveReports(
       centerLat: _lastQueriedCenter.lat,
       centerLng: _lastQueriedCenter.lng,
@@ -74,8 +110,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   @override
   void dispose() {
     _panDebounceTimer?.cancel();
-    _mapMoveController?.dispose();
-    _mapController.dispose();
+    _annotationTapCancelable?.cancel();
+    widget.mapTestController?._onSimulatedMove = null;
     super.dispose();
   }
 
@@ -95,11 +131,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     });
   }
 
-  void _onMapPositionChanged(MapCamera camera) {
-    _cameraCenter = (
-      lat: camera.center.latitude,
-      lng: camera.center.longitude,
-    );
+  void _onCameraCenterChanged(double lat, double lng) {
+    _cameraCenter = (lat: lat, lng: lng);
     _panDebounceTimer?.cancel();
     _panDebounceTimer = Timer(widget.panDebounceDuration, () {
       if (!mounted) return;
@@ -129,55 +162,25 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     setState(() {
       _userLocation = loc;
     });
+    widget.mapTestController?.hasUserLocation = true;
     _refreshReportsForCenter(loc);
-    _animateMapTo(LatLng(loc.lat, loc.lng), _userFocusZoom);
+    _animateMapTo(loc.lat, loc.lng, _userFocusZoom);
   }
 
-  void _animateMapTo(LatLng destLocation, double destZoom) {
-    _mapMoveController?.dispose();
-    final controller = AnimationController(
-      duration: const Duration(milliseconds: 550),
-      vsync: this,
+  void _animateMapTo(double lat, double lng, double zoom) {
+    _cameraCenter = (lat: lat, lng: lng);
+    if (widget.mapTestController != null) {
+      widget.mapTestController!.centerLat = lat;
+      widget.mapTestController!.centerLng = lng;
+      widget.mapTestController!.zoom = zoom;
+    }
+    _mapboxMap?.easeTo(
+      CameraOptions(
+        center: Point(coordinates: Position(lng, lat)),
+        zoom: zoom,
+      ),
+      MapAnimationOptions(duration: 550),
     );
-    _mapMoveController = controller;
-
-    final startCenter = _mapController.camera.center;
-    final startZoom = _mapController.camera.zoom;
-    final latTween = Tween<double>(
-      begin: startCenter.latitude,
-      end: destLocation.latitude,
-    );
-    final lngTween = Tween<double>(
-      begin: startCenter.longitude,
-      end: destLocation.longitude,
-    );
-    final zoomTween = Tween<double>(begin: startZoom, end: destZoom);
-    final animation = CurvedAnimation(
-      parent: controller,
-      curve: Curves.easeOutCubic,
-    );
-
-    controller.addListener(() {
-      _mapController.move(
-        LatLng(
-          latTween.evaluate(animation),
-          lngTween.evaluate(animation),
-        ),
-        zoomTween.evaluate(animation),
-      );
-    });
-
-    controller.addStatusListener((status) {
-      if (status == AnimationStatus.completed ||
-          status == AnimationStatus.dismissed) {
-        if (identical(_mapMoveController, controller)) {
-          _mapMoveController = null;
-        }
-        controller.dispose();
-      }
-    });
-
-    controller.forward();
   }
 
   Future<void> _recenterToUserLocation() async {
@@ -194,35 +197,179 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     setState(() {
       _userLocation = loc;
     });
+    widget.mapTestController?.hasUserLocation = true;
     _refreshReportsForCenter(loc);
-    _animateMapTo(LatLng(loc.lat, loc.lng), _userFocusZoom);
+    _animateMapTo(loc.lat, loc.lng, _userFocusZoom);
   }
 
   Future<({double lat, double lng})?> _resolveDeviceLocation() async {
-    final enabled = await Geolocator.isLocationServiceEnabled();
+    final enabled = await geo.Geolocator.isLocationServiceEnabled();
     if (!enabled) return null;
 
-    var permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
+    var permission = await geo.Geolocator.checkPermission();
+    if (permission == geo.LocationPermission.denied) {
+      permission = await geo.Geolocator.requestPermission();
     }
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
+    if (permission == geo.LocationPermission.denied ||
+        permission == geo.LocationPermission.deniedForever) {
       return null;
     }
 
     try {
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
+      final pos = await geo.Geolocator.getCurrentPosition(
+        locationSettings: const geo.LocationSettings(
+          accuracy: geo.LocationAccuracy.high,
           timeLimit: Duration(seconds: 8),
         ),
       );
       return (lat: pos.latitude, lng: pos.longitude);
     } catch (_) {
-      final lastKnown = await Geolocator.getLastKnownPosition();
+      final lastKnown = await geo.Geolocator.getLastKnownPosition();
       if (lastKnown == null) return null;
       return (lat: lastKnown.latitude, lng: lastKnown.longitude);
+    }
+  }
+
+  Future<void> _onMapCreated(MapboxMap mapboxMap) async {
+    _mapboxMap = mapboxMap;
+
+    try {
+      await mapboxMap.location.updateSettings(
+        LocationComponentSettings(
+          enabled: true,
+          pulsingEnabled: true,
+        ),
+      );
+    } catch (_) {
+      // Location puck requires runtime location permission; safe to ignore if denied.
+    }
+
+    final manager = await mapboxMap.annotations.createPointAnnotationManager();
+    if (!mounted) return;
+    _pointAnnotationManager = manager;
+    _annotationTapCancelable = manager.tapEvents(
+      onTap: (PointAnnotation annotation) {
+        final cluster = _annotationClusters[annotation.id];
+        if (cluster == null || !mounted) return;
+        if (cluster.isCluster) {
+          _openClusterDetails(cluster);
+        } else {
+          _openPinDetails(cluster.reports.first);
+        }
+      },
+    );
+
+    if (_userLocation != null) {
+      _animateMapTo(_userLocation!.lat, _userLocation!.lng, _userFocusZoom);
+    }
+    if (_styleLoaded) {
+      await _syncMapboxLayers(_latestClusters);
+    }
+  }
+
+  Future<void> _onStyleLoaded(StyleLoadedEventData _) async {
+    final mapboxMap = _mapboxMap;
+    if (!mounted || mapboxMap == null) return;
+
+    final initialGeoJson = RainZoneGeoJson.buildFeatureCollection(_latestClusters);
+
+    if (!await mapboxMap.styleSourceExists(_rainZonesSourceId)) {
+      await mapboxMap.addSource(
+        GeoJsonSource(
+          id: _rainZonesSourceId,
+          data: initialGeoJson,
+        ),
+      );
+    }
+    if (!await mapboxMap.styleLayerExists(_rainZonesFillLayerId)) {
+      await mapboxMap.addLayer(
+        FillLayer(
+          id: _rainZonesFillLayerId,
+          sourceId: _rainZonesSourceId,
+          slot: 'middle',
+          fillOpacity: 0.28,
+          fillColorExpression: ['get', 'fillColor'],
+        ),
+      );
+    }
+    if (!await mapboxMap.styleLayerExists(_rainZonesLineLayerId)) {
+      await mapboxMap.addLayer(
+        LineLayer(
+          id: _rainZonesLineLayerId,
+          sourceId: _rainZonesSourceId,
+          slot: 'middle',
+          lineOpacity: 0.75,
+          lineWidth: 2.0,
+          lineColorExpression: ['get', 'borderColor'],
+        ),
+      );
+    }
+
+    _styleLoaded = true;
+    await _syncMapboxLayers(_latestClusters);
+  }
+
+  Future<void> _syncMapboxLayers(List<RainCluster> clusters) async {
+    final mapboxMap = _mapboxMap;
+    if (!mounted || mapboxMap == null || !_styleLoaded) return;
+
+    final generation = ++_annotationSyncGeneration;
+
+    final geoJson = RainZoneGeoJson.buildFeatureCollection(clusters);
+    try {
+      await mapboxMap.setStyleSourceProperty(
+        _rainZonesSourceId,
+        'data',
+        geoJson,
+      );
+    } catch (_) {
+      // Ignore transient style-not-ready errors.
+    }
+
+    final manager = _pointAnnotationManager;
+    if (manager == null) return;
+
+    final options = <PointAnnotationOptions>[];
+    for (final cluster in clusters) {
+      final color = _colorForIntensity(cluster.strongestIntensity);
+      final image = cluster.isCluster
+          ? await _markerIcons.getClusterBadgeIcon(
+              cluster.strongestIntensity,
+              color,
+              cluster.reports.length,
+            )
+          : await _markerIcons.getPinIcon(
+              cluster.strongestIntensity,
+              color,
+            );
+      if (generation != _annotationSyncGeneration || !mounted) return;
+
+      options.add(
+        PointAnnotationOptions(
+          geometry: Point(
+            coordinates: Position(cluster.centerLng, cluster.centerLat),
+          ),
+          image: image,
+          iconSize: 0.6,
+          iconAnchor:
+              cluster.isCluster ? IconAnchor.CENTER : IconAnchor.BOTTOM,
+        ),
+      );
+    }
+
+    if (generation != _annotationSyncGeneration || !mounted) return;
+    await manager.deleteAll();
+    _annotationClusters.clear();
+
+    if (options.isEmpty) return;
+    final created = await manager.createMulti(options);
+    if (generation != _annotationSyncGeneration || !mounted) return;
+
+    for (var i = 0; i < created.length && i < clusters.length; i++) {
+      final annotation = created[i];
+      if (annotation != null) {
+        _annotationClusters[annotation.id] = clusters[i];
+      }
     }
   }
 
@@ -376,6 +523,59 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     }
   }
 
+  Widget _buildTestMapSurface(List<RainCluster> clusters) {
+    return ColoredBox(
+      key: const Key('mapbox_test_surface'),
+      color: const Color(0xFFEFF3F6),
+      child: Center(
+        child: Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          alignment: WrapAlignment.center,
+          children: [
+            if (_userLocation != null)
+              const SizedBox(
+                key: Key('user_location_marker'),
+                width: 14,
+                height: 14,
+              ),
+            for (final cluster in clusters)
+              if (!cluster.isCluster)
+                GestureDetector(
+                  onTap: () => _openPinDetails(cluster.reports.first),
+                  child: Icon(
+                    Icons.location_on,
+                    size: 40,
+                    color: _colorForIntensity(cluster.strongestIntensity),
+                  ),
+                )
+              else
+                GestureDetector(
+                  onTap: () => _openClusterDetails(cluster),
+                  child: Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _colorForIntensity(cluster.strongestIntensity),
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      '${cluster.reports.length}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<RainReport>>(
@@ -387,109 +587,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         }
         final reports = _latestReports;
         final clusters = RainClusterer.cluster(reports);
-        final circles = clusters.map((cluster) {
-          final color = _colorForIntensity(cluster.strongestIntensity);
-          return CircleMarker(
-            point: LatLng(cluster.centerLat, cluster.centerLng),
-            radius: cluster.radiusMeters,
-            useRadiusInMeter: true,
-            color: color.withValues(alpha: 0.28),
-            borderColor: color.withValues(alpha: 0.75),
-            borderStrokeWidth: 2,
-          );
-        }).toList();
+        _latestClusters = clusters;
+        widget.mapTestController?.clusters = clusters;
 
-        final markers = <Marker>[
-          if (_userLocation != null)
-            Marker(
-              key: const Key('user_location_marker'),
-              point: LatLng(_userLocation!.lat, _userLocation!.lng),
-              width: 28,
-              height: 28,
-              child: IgnorePointer(
-                child: Container(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.blue.withValues(alpha: 0.22),
-                  ),
-                  alignment: Alignment.center,
-                  child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.blue.shade600,
-                      border: Border.all(color: Colors.white, width: 2.5),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Colors.black26,
-                          blurRadius: 4,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ...clusters.map((cluster) {
-            final color = _colorForIntensity(cluster.strongestIntensity);
-            if (!cluster.isCluster) {
-              final report = cluster.reports.first;
-              return Marker(
-                point: LatLng(cluster.centerLat, cluster.centerLng),
-                width: 44,
-                height: 44,
-                child: GestureDetector(
-                  onTap: () => _openPinDetails(report),
-                  child: Tooltip(
-                    message: '${report.intensity.label} Rain',
-                    child: Icon(
-                      Icons.location_on,
-                      size: 40,
-                      color: color,
-                    ),
-                  ),
-                ),
-              );
-            }
-
-            return Marker(
-              point: LatLng(cluster.centerLat, cluster.centerLng),
-              width: 44,
-              height: 44,
-              child: GestureDetector(
-                onTap: () => _openClusterDetails(cluster),
-                child: Tooltip(
-                  message:
-                      '${cluster.strongestIntensity.label} Rain (${cluster.reports.length} reports)',
-                  child: Container(
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: color,
-                      border: Border.all(color: Colors.white, width: 2),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Colors.black26,
-                          blurRadius: 4,
-                          offset: Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      '${cluster.reports.length}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          }),
-        ];
+        if (widget.useNativeMapView && _styleLoaded) {
+          unawaited(_syncMapboxLayers(clusters));
+        }
 
         return Scaffold(
           appBar: AppBar(
@@ -506,25 +609,31 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           ),
           body: Stack(
             children: [
-              FlutterMap(
-                mapController: _mapController,
-                options: MapOptions(
-                  initialCenter: LatLng(_cameraCenter.lat, _cameraCenter.lng),
-                  initialZoom: _defaultOverviewZoom,
-                  onPositionChanged: (camera, _) => _onMapPositionChanged(camera),
-                ),
-                children: [
-                  if (widget.useNativeMapView)
-                    TileLayer(
-                      urlTemplate:
-                          'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
-                      userAgentPackageName:
-                          'com.example.rainreporter.rain_reporter',
+              if (widget.useNativeMapView)
+                MapWidget(
+                  key: const ValueKey('mapbox_map_widget'),
+                  styleUri: MapboxStyles.STANDARD,
+                  viewport: CameraViewportState(
+                    center: Point(
+                      coordinates: Position(
+                        _defaultCenter.lng,
+                        _defaultCenter.lat,
+                      ),
                     ),
-                  CircleLayer(circles: circles),
-                  MarkerLayer(markers: markers),
-                ],
-              ),
+                    zoom: _defaultOverviewZoom,
+                  ),
+                  onMapCreated: _onMapCreated,
+                  onStyleLoadedListener: _onStyleLoaded,
+                  onCameraChangeListener: (CameraChangedEventData event) {
+                    final coords = event.cameraState.center.coordinates;
+                    _onCameraCenterChanged(
+                      coords.lat.toDouble(),
+                      coords.lng.toDouble(),
+                    );
+                  },
+                )
+              else
+                _buildTestMapSurface(clusters),
               if (widget.isOfflineMode)
                 Positioned(
                   top: 8,

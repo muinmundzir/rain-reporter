@@ -1,9 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:latlong2/latlong.dart';
 import 'package:rain_reporter/data/auth_service.dart';
 import 'package:rain_reporter/data/rain_report_repository.dart';
 import 'package:rain_reporter/domain/rain_intensity.dart';
@@ -57,7 +55,7 @@ class _CountingRepository extends InMemoryRainReportRepository {
 }
 
 void main() {
-  testWidgets('MapScreen renders OpenStreetMap (FlutterMap), opens ReportBottomSheet, submits report, and does not recreate stream on rebuild', (tester) async {
+  testWidgets('MapScreen renders map surface, opens ReportBottomSheet, submits report, and does not recreate stream on rebuild', (tester) async {
     final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'test-uid');
 
@@ -71,7 +69,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byType(FlutterMap), findsOneWidget);
+    expect(find.byKey(const Key('mapbox_test_surface')), findsOneWidget);
     final initialWatchCalls = repo.watchCalls;
     expect(find.text('Report Rain'), findsOneWidget);
     expect(find.text('0 active nearby'), findsOneWidget);
@@ -141,19 +139,20 @@ void main() {
   testWidgets('submits report at real GPS even after panning map elsewhere', (tester) async {
     final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'test-uid');
+    final mapController = MapTestController();
 
     await tester.pumpWidget(
       RainReporterApp(
         authService: auth,
         repository: repo,
         useNativeMapView: false,
+        mapTestController: mapController,
         locationProvider: () async => (lat: -6.2000, lng: 106.8166),
       ),
     );
     await tester.pumpAndSettle();
 
-    final mapWidget = tester.widget<FlutterMap>(find.byType(FlutterMap));
-    mapWidget.mapController!.move(const LatLng(-6.3000, 106.9000), 14);
+    mapController.simulateCameraMove(-6.3000, 106.9000, 14);
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Report Rain'));
@@ -171,6 +170,7 @@ void main() {
   testWidgets('refreshes active reports stream after debounced pan beyond 500m', (tester) async {
     final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'test-uid');
+    final mapController = MapTestController();
 
     await tester.pumpWidget(
       MaterialApp(
@@ -178,6 +178,7 @@ void main() {
           authService: auth,
           repository: repo,
           useNativeMapView: false,
+          mapTestController: mapController,
           locationProvider: () async => (lat: -6.2000, lng: 106.8166),
           panDebounceDuration: const Duration(milliseconds: 200),
         ),
@@ -186,8 +187,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final initialWatchCalls = repo.watchCalls;
-    final mapWidget = tester.widget<FlutterMap>(find.byType(FlutterMap));
-    mapWidget.mapController!.move(const LatLng(-6.2200, 106.8166), 14);
+    mapController.simulateCameraMove(-6.2200, 106.8166, 14);
 
     await tester.pump(const Duration(milliseconds: 100));
     expect(repo.watchCalls, equals(initialWatchCalls));
@@ -201,6 +201,7 @@ void main() {
   testWidgets('does not refresh stream when pan distance is within 500m', (tester) async {
     final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'test-uid');
+    final mapController = MapTestController();
 
     await tester.pumpWidget(
       MaterialApp(
@@ -208,6 +209,7 @@ void main() {
           authService: auth,
           repository: repo,
           useNativeMapView: false,
+          mapTestController: mapController,
           locationProvider: () async => (lat: -6.2000, lng: 106.8166),
           panDebounceDuration: const Duration(milliseconds: 200),
         ),
@@ -216,9 +218,8 @@ void main() {
     await tester.pumpAndSettle();
 
     final initialWatchCalls = repo.watchCalls;
-    final mapWidget = tester.widget<FlutterMap>(find.byType(FlutterMap));
     // ~55m south
-    mapWidget.mapController!.move(const LatLng(-6.2005, 106.8166), 14);
+    mapController.simulateCameraMove(-6.2005, 106.8166, 14);
 
     await tester.pump(const Duration(milliseconds: 300));
     expect(repo.watchCalls, equals(initialWatchCalls));
@@ -227,6 +228,7 @@ void main() {
   testWidgets('coalesces rapid pans within debounce window into a single refresh', (tester) async {
     final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'test-uid');
+    final mapController = MapTestController();
 
     await tester.pumpWidget(
       MaterialApp(
@@ -234,6 +236,7 @@ void main() {
           authService: auth,
           repository: repo,
           useNativeMapView: false,
+          mapTestController: mapController,
           locationProvider: () async => (lat: -6.2000, lng: 106.8166),
           panDebounceDuration: const Duration(milliseconds: 200),
         ),
@@ -242,11 +245,10 @@ void main() {
     await tester.pumpAndSettle();
 
     final initialWatchCalls = repo.watchCalls;
-    final mapWidget = tester.widget<FlutterMap>(find.byType(FlutterMap));
 
-    mapWidget.mapController!.move(const LatLng(-6.2200, 106.8166), 14);
+    mapController.simulateCameraMove(-6.2200, 106.8166, 14);
     await tester.pump(const Duration(milliseconds: 100));
-    mapWidget.mapController!.move(const LatLng(-6.2500, 106.8500), 14);
+    mapController.simulateCameraMove(-6.2500, 106.8500, 14);
 
     await tester.pump(const Duration(milliseconds: 250));
     expect(repo.watchCalls, equals(initialWatchCalls + 1));
@@ -257,6 +259,7 @@ void main() {
   testWidgets('cancels pending pan debounce timer on dispose', (tester) async {
     final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'test-uid');
+    final mapController = MapTestController();
 
     await tester.pumpWidget(
       MaterialApp(
@@ -264,6 +267,7 @@ void main() {
           authService: auth,
           repository: repo,
           useNativeMapView: false,
+          mapTestController: mapController,
           locationProvider: () async => (lat: -6.2000, lng: 106.8166),
           panDebounceDuration: const Duration(milliseconds: 200),
         ),
@@ -271,12 +275,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final mapWidget = tester.widget<FlutterMap>(find.byType(FlutterMap));
-    mapWidget.mapController!.move(const LatLng(-6.2200, 106.8166), 14);
+    mapController.simulateCameraMove(-6.2200, 106.8166, 14);
 
     // Unmount immediately while debounce timer is pending
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump(const Duration(milliseconds: 300));
     expect(tester.takeException(), isNull);
   });
 
@@ -302,7 +304,6 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Tap Report Rain twice while GPS lookup is pending
     await tester.tap(find.text('Report Rain'));
     await tester.pump();
     await tester.tap(find.text('Report Rain'));
@@ -316,9 +317,10 @@ void main() {
     expect(find.text('Submit Report'), findsOneWidget);
   });
 
-  testWidgets('renders CircleLayer with 300m radius for a single active report and opens PinDetailBottomSheet on tap', (tester) async {
+  testWidgets('builds 300m zone for a single active report and opens PinDetailBottomSheet on tap', (tester) async {
     final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'test-uid');
+    final mapController = MapTestController();
     await repo.submitReport(
       uid: 'u1',
       intensity: RainIntensity.heavy,
@@ -332,15 +334,14 @@ void main() {
         authService: auth,
         repository: repo,
         useNativeMapView: false,
+        mapTestController: mapController,
         locationProvider: () async => (lat: -6.2000, lng: 106.8166),
       ),
     );
     await tester.pumpAndSettle();
 
-    final circleLayer = tester.widget<CircleLayer>(find.byType(CircleLayer));
-    expect(circleLayer.circles, hasLength(1));
-    expect(circleLayer.circles.single.useRadiusInMeter, isTrue);
-    expect(circleLayer.circles.single.radius, equals(300));
+    expect(mapController.clusters, hasLength(1));
+    expect(mapController.clusters.single.radiusMeters, equals(300));
 
     await tester.tap(find.byIcon(Icons.location_on));
     await tester.pumpAndSettle();
@@ -349,9 +350,10 @@ void main() {
     expect(find.text('Pouring hard'), findsOneWidget);
   });
 
-  testWidgets('merges nearby reports into one larger CircleMarker and cluster badge that opens ClusterDetailBottomSheet', (tester) async {
+  testWidgets('merges nearby reports into one larger cluster zone and badge that opens ClusterDetailBottomSheet', (tester) async {
     final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'voter-uid');
+    final mapController = MapTestController();
     await repo.submitReport(
       uid: 'u1',
       intensity: RainIntensity.light,
@@ -372,16 +374,14 @@ void main() {
         authService: auth,
         repository: repo,
         useNativeMapView: false,
+        mapTestController: mapController,
         locationProvider: () async => (lat: -6.2000, lng: 106.8166),
       ),
     );
     await tester.pumpAndSettle();
 
-    final circleLayer = tester.widget<CircleLayer>(find.byType(CircleLayer));
-    expect(circleLayer.circles, hasLength(1));
-    expect(circleLayer.circles.single.useRadiusInMeter, isTrue);
-    expect(circleLayer.circles.single.radius, greaterThan(300));
-
+    expect(mapController.clusters, hasLength(1));
+    expect(mapController.clusters.single.radiusMeters, greaterThan(300));
     expect(find.byIcon(Icons.location_on), findsNothing);
     expect(find.text('2'), findsOneWidget);
 
@@ -400,16 +400,16 @@ void main() {
     expect(active.any((r) => r.confirmCount == 2), isTrue);
   });
 
-  testWidgets('keeps distant reports (>600m apart) as separate CircleMarkers and individual pins', (tester) async {
+  testWidgets('keeps distant reports (>600m apart) as separate zones and individual pins', (tester) async {
     final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'test-uid');
+    final mapController = MapTestController();
     await repo.submitReport(
       uid: 'u1',
       intensity: RainIntensity.moderate,
       rawLat: -6.2000,
       rawLng: 106.8166,
     );
-    // ~830m east (outside 600m merge threshold, visible at zoom 16)
     await repo.submitReport(
       uid: 'u2',
       intensity: RainIntensity.heavy,
@@ -422,13 +422,13 @@ void main() {
         authService: auth,
         repository: repo,
         useNativeMapView: false,
+        mapTestController: mapController,
         locationProvider: () async => (lat: -6.2000, lng: 106.8166),
       ),
     );
     await tester.pumpAndSettle();
 
-    final circleLayer = tester.widget<CircleLayer>(find.byType(CircleLayer));
-    expect(circleLayer.circles, hasLength(2));
+    expect(mapController.clusters, hasLength(2));
     expect(find.byIcon(Icons.location_on), findsNWidgets(2));
   });
 
@@ -446,6 +446,7 @@ void main() {
       return watchCall == 1 ? controller1.stream : controller2.stream;
     });
     final auth = FakeAuthService(uid: 'test-uid');
+    final mapController = MapTestController();
 
     await tester.pumpWidget(
       MaterialApp(
@@ -453,6 +454,7 @@ void main() {
           authService: auth,
           repository: repo,
           useNativeMapView: false,
+          mapTestController: mapController,
           locationProvider: () async => (lat: -6.9175, lng: 107.6191),
           panDebounceDuration: const Duration(milliseconds: 100),
         ),
@@ -474,45 +476,42 @@ void main() {
     await tester.pump();
     expect(find.text('1 active nearby'), findsOneWidget);
 
-    // Pan >500m to trigger a new stream that has not emitted yet
-    final mapWidget = tester.widget<FlutterMap>(find.byType(FlutterMap));
-    mapWidget.mapController!.move(const LatLng(-6.9300, 107.6191), 14);
+    mapController.simulateCameraMove(-6.9300, 107.6191, 14);
     await tester.pump(const Duration(milliseconds: 150));
 
-    // Must still display 1 active nearby instead of flickering to 0 while waiting
     expect(find.text('1 active nearby'), findsOneWidget);
   });
 
-  testWidgets('animates zoom to 16 at user location, shows user dot, and recenters on tap', (tester) async {
+  testWidgets('zooms to 16 at user location, shows user dot, and recenters on tap', (tester) async {
     final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'test-uid');
+    final mapController = MapTestController();
 
     await tester.pumpWidget(
       RainReporterApp(
         authService: auth,
         repository: repo,
         useNativeMapView: false,
+        mapTestController: mapController,
         locationProvider: () async => (lat: -6.9000, lng: 107.6000),
       ),
     );
     await tester.pumpAndSettle();
 
-    final mapWidget = tester.widget<FlutterMap>(find.byType(FlutterMap));
-    expect(mapWidget.mapController!.camera.zoom, closeTo(16.0, 0.01));
-    expect(mapWidget.mapController!.camera.center.latitude, closeTo(-6.9000, 0.0001));
-    expect(mapWidget.mapController!.camera.center.longitude, closeTo(107.6000, 0.0001));
+    expect(mapController.zoom, closeTo(16.0, 0.01));
+    expect(mapController.centerLat, closeTo(-6.9000, 0.0001));
+    expect(mapController.centerLng, closeTo(107.6000, 0.0001));
     expect(find.byKey(const Key('user_location_marker')), findsOneWidget);
 
-    // Pan away, then tap recenter button
-    mapWidget.mapController!.move(const LatLng(-6.9500, 107.6500), 13);
+    mapController.simulateCameraMove(-6.9500, 107.6500, 13);
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('recenter_button')));
     await tester.pumpAndSettle();
 
-    expect(mapWidget.mapController!.camera.zoom, closeTo(16.0, 0.01));
-    expect(mapWidget.mapController!.camera.center.latitude, closeTo(-6.9000, 0.0001));
-    expect(mapWidget.mapController!.camera.center.longitude, closeTo(107.6000, 0.0001));
+    expect(mapController.zoom, closeTo(16.0, 0.01));
+    expect(mapController.centerLat, closeTo(-6.9000, 0.0001));
+    expect(mapController.centerLng, closeTo(107.6000, 0.0001));
   });
 
   testWidgets('shows offline mode banner when isOfflineMode is true', (tester) async {
@@ -569,7 +568,6 @@ void main() {
   testWidgets('blocks Stopped here when user GPS is >500m from the pin', (tester) async {
     final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'voter-uid');
-    // ~815m east of user's GPS
     await repo.submitReport(
       uid: 'u1',
       intensity: RainIntensity.heavy,
@@ -603,7 +601,6 @@ void main() {
   testWidgets('allows Stopped here when user GPS is within 500m of the pin', (tester) async {
     final repo = _CountingRepository();
     final auth = FakeAuthService(uid: 'voter-uid');
-    // ~100m east of user's GPS
     await repo.submitReport(
       uid: 'u1',
       intensity: RainIntensity.heavy,
