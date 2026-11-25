@@ -674,6 +674,14 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                   onMapCreated: _onMapCreated,
                   onStyleLoadedListener: _onStyleLoaded,
+                  onMapLoadErrorListener: (MapLoadingErrorEventData error) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Map load error: ${error.message}'),
+                      ),
+                    );
+                  },
                   onCameraChangeListener: (CameraChangedEventData event) {
                     final coords = event.cameraState.center.coordinates;
                     _onCameraCenterChanged(
