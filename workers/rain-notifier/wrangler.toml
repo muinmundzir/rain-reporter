@@ -1,0 +1,6 @@
+name = "rain-notifier"
+main = "src/index.mjs"
+compatibility_date = "2026-11-01"
+
+[vars]
+FIREBASE_PROJECT_ID = "rain-reporter-bdg"
