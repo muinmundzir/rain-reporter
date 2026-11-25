@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart' as geo;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 import '../data/auth_service.dart';
+import '../data/notification_service.dart';
 import '../data/rain_report_repository.dart';
 import '../domain/location_privacy.dart';
 import '../domain/rain_cluster.dart';
@@ -40,6 +41,7 @@ class MapScreen extends StatefulWidget {
     super.key,
     required this.authService,
     required this.repository,
+    this.notificationService = const NoOpNotificationService(),
     this.locationProvider,
     this.useNativeMapView = true,
     this.isOfflineMode = false,
@@ -52,6 +54,7 @@ class MapScreen extends StatefulWidget {
 
   final AuthService authService;
   final RainReportRepository repository;
+  final NotificationService notificationService;
   final Future<({double lat, double lng})?> Function()? locationProvider;
   final bool useNativeMapView;
   final bool isOfflineMode;
@@ -80,6 +83,8 @@ class _MapScreenState extends State<MapScreen> {
   ({double lat, double lng}) _cameraCenter = _defaultCenter;
   ({double lat, double lng}) _lastQueriedCenter = _defaultCenter;
   ({double lat, double lng})? _userLocation;
+  ({double lat, double lng})? _pendingNotificationTarget;
+  bool _hasNotificationFocus = false;
   late Stream<List<RainReport>> _reportsStream;
   List<RainReport> _latestReports = const <RainReport>[];
   List<RainCluster> _latestClusters = const <RainCluster>[];
@@ -105,6 +110,11 @@ class _MapScreenState extends State<MapScreen> {
       centerLat: _lastQueriedCenter.lat,
       centerLng: _lastQueriedCenter.lng,
     );
+    unawaited(
+      widget.notificationService.initialize(
+        onNotificationTap: _handleNotificationTap,
+      ),
+    );
     _initLocation();
   }
 
@@ -112,8 +122,20 @@ class _MapScreenState extends State<MapScreen> {
   void dispose() {
     _panDebounceTimer?.cancel();
     _annotationTapCancelable?.cancel();
+    widget.notificationService.dispose();
     widget.mapTestController?._onSimulatedMove = null;
     super.dispose();
+  }
+
+  void _handleNotificationTap(double lat, double lng) {
+    if (!mounted) return;
+    _hasNotificationFocus = true;
+    _pendingNotificationTarget = (lat: lat, lng: lng);
+    _refreshReportsForCenter((lat: lat, lng: lng));
+    _animateMapTo(lat, lng, _userFocusZoom);
+    if (_mapboxMap != null) {
+      _pendingNotificationTarget = null;
+    }
   }
 
   void _refreshReportsForCenter(({double lat, double lng}) newCenter) {
@@ -164,9 +186,17 @@ class _MapScreenState extends State<MapScreen> {
       _userLocation = loc;
     });
     widget.mapTestController?.hasUserLocation = true;
-    _refreshReportsForCenter(loc);
-    _animateMapTo(loc.lat, loc.lng, _userFocusZoom);
     unawaited(_enableLocationPuck());
+    unawaited(
+      widget.notificationService.updateLocationCell(
+        lat: loc.lat,
+        lng: loc.lng,
+      ),
+    );
+    if (!_hasNotificationFocus) {
+      _refreshReportsForCenter(loc);
+      _animateMapTo(loc.lat, loc.lng, _userFocusZoom);
+    }
   }
 
   void _animateMapTo(double lat, double lng, double zoom) {
@@ -203,6 +233,12 @@ class _MapScreenState extends State<MapScreen> {
     _refreshReportsForCenter(loc);
     _animateMapTo(loc.lat, loc.lng, _userFocusZoom);
     unawaited(_enableLocationPuck());
+    unawaited(
+      widget.notificationService.updateLocationCell(
+        lat: loc.lat,
+        lng: loc.lng,
+      ),
+    );
   }
 
   Future<({double lat, double lng})?> _resolveDeviceLocation() async {
@@ -268,7 +304,11 @@ class _MapScreenState extends State<MapScreen> {
       },
     );
 
-    if (_userLocation != null) {
+    final pendingTarget = _pendingNotificationTarget;
+    if (pendingTarget != null) {
+      _pendingNotificationTarget = null;
+      _animateMapTo(pendingTarget.lat, pendingTarget.lng, _userFocusZoom);
+    } else if (_userLocation != null) {
       _animateMapTo(_userLocation!.lat, _userLocation!.lng, _userFocusZoom);
     }
     if (_styleLoaded) {
@@ -459,12 +499,15 @@ class _MapScreenState extends State<MapScreen> {
 
       try {
         final uid = await widget.authService.ensureAnonymousUid();
-        await widget.repository.submitReport(
+        final report = await widget.repository.submitReport(
           uid: uid,
           intensity: submission.intensity,
           rawLat: loc.lat,
           rawLng: loc.lng,
           note: submission.note,
+        );
+        unawaited(
+          widget.notificationService.notifyRainReport(report: report),
         );
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(

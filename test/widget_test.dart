@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rain_reporter/data/auth_service.dart';
+import 'package:rain_reporter/data/notification_service.dart';
 import 'package:rain_reporter/data/rain_report_repository.dart';
 import 'package:rain_reporter/domain/rain_intensity.dart';
 import 'package:rain_reporter/domain/rain_report.dart';
@@ -626,6 +627,111 @@ void main() {
 
     expect(find.text('0 active nearby'), findsOneWidget);
   });
+
+  testWidgets('initializes notification service, subscribes location cell, notifies on report, and centers map on notification tap', (tester) async {
+    final repo = _CountingRepository();
+    final auth = FakeAuthService(uid: 'test-uid');
+    final mapController = MapTestController();
+    final notifications = _RecordingNotificationService();
+
+    await tester.pumpWidget(
+      RainReporterApp(
+        authService: auth,
+        repository: repo,
+        notificationService: notifications,
+        useNativeMapView: false,
+        mapTestController: mapController,
+        locationProvider: () async => (lat: -6.9175, lng: 107.6191),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(notifications.initialized, isTrue);
+    expect(notifications.updatedCells, equals([(lat: -6.9175, lng: 107.6191)]));
+
+    await tester.tap(find.text('Report Rain'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Heavy'));
+    await tester.pump();
+    await tester.tap(find.text('Submit Report'));
+    await tester.pumpAndSettle();
+
+    expect(notifications.notifiedReports, hasLength(1));
+    expect(notifications.notifiedReports.single.intensity, equals(RainIntensity.heavy));
+
+    // Simulate tapping a push notification from another neighborhood
+    final watchBeforeTap = repo.watchCalls;
+    notifications.simulateTap(-6.9300, 107.6500);
+    await tester.pumpAndSettle();
+
+    expect(mapController.centerLat, closeTo(-6.9300, 0.0001));
+    expect(mapController.centerLng, closeTo(107.6500, 0.0001));
+    expect(mapController.zoom, closeTo(16.0, 0.01));
+    expect(repo.watchCalls, equals(watchBeforeTap + 1));
+  });
+
+  testWidgets('cold-start notification tap is not overwritten when delayed GPS resolves', (tester) async {
+    final repo = _CountingRepository();
+    final auth = FakeAuthService(uid: 'test-uid');
+    final mapController = MapTestController();
+    final notifications = _RecordingNotificationService();
+    final delayedGps = Completer<({double lat, double lng})?>();
+
+    await tester.pumpWidget(
+      RainReporterApp(
+        authService: auth,
+        repository: repo,
+        notificationService: notifications,
+        useNativeMapView: false,
+        mapTestController: mapController,
+        locationProvider: () => delayedGps.future,
+      ),
+    );
+    await tester.pump();
+
+    // Cold-start notification tap arrives before GPS resolves
+    notifications.simulateTap(-6.9300, 107.6500);
+    await tester.pump();
+
+    // Delayed GPS resolves in another neighborhood
+    delayedGps.complete((lat: -6.9175, lng: 107.6191));
+    await tester.pumpAndSettle();
+
+    // Map must stay focused on the notification target, while still subscribing user's GPS cell
+    expect(mapController.centerLat, closeTo(-6.9300, 0.0001));
+    expect(mapController.centerLng, closeTo(107.6500, 0.0001));
+    expect(notifications.updatedCells, equals([(lat: -6.9175, lng: 107.6191)]));
+  });
+}
+
+class _RecordingNotificationService implements NotificationService {
+  bool initialized = false;
+  NotificationTapCallback? _onTap;
+  final List<({double lat, double lng})> updatedCells = [];
+  final List<RainReport> notifiedReports = [];
+
+  @override
+  Future<void> initialize({required NotificationTapCallback onNotificationTap}) async {
+    initialized = true;
+    _onTap = onNotificationTap;
+  }
+
+  @override
+  Future<void> updateLocationCell({required double lat, required double lng}) async {
+    updatedCells.add((lat: lat, lng: lng));
+  }
+
+  @override
+  Future<void> notifyRainReport({required RainReport report}) async {
+    notifiedReports.add(report);
+  }
+
+  void simulateTap(double lat, double lng) {
+    _onTap?.call(lat, lng);
+  }
+
+  @override
+  void dispose() {}
 }
 
 class _CustomStreamRepository extends InMemoryRainReportRepository {
