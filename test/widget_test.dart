@@ -669,6 +669,39 @@ void main() {
     expect(mapController.zoom, closeTo(16.0, 0.01));
     expect(repo.watchCalls, equals(watchBeforeTap + 1));
   });
+
+  testWidgets('cold-start notification tap is not overwritten when delayed GPS resolves', (tester) async {
+    final repo = _CountingRepository();
+    final auth = FakeAuthService(uid: 'test-uid');
+    final mapController = MapTestController();
+    final notifications = _RecordingNotificationService();
+    final delayedGps = Completer<({double lat, double lng})?>();
+
+    await tester.pumpWidget(
+      RainReporterApp(
+        authService: auth,
+        repository: repo,
+        notificationService: notifications,
+        useNativeMapView: false,
+        mapTestController: mapController,
+        locationProvider: () => delayedGps.future,
+      ),
+    );
+    await tester.pump();
+
+    // Cold-start notification tap arrives before GPS resolves
+    notifications.simulateTap(-6.9300, 107.6500);
+    await tester.pump();
+
+    // Delayed GPS resolves in another neighborhood
+    delayedGps.complete((lat: -6.9175, lng: 107.6191));
+    await tester.pumpAndSettle();
+
+    // Map must stay focused on the notification target, while still subscribing user's GPS cell
+    expect(mapController.centerLat, closeTo(-6.9300, 0.0001));
+    expect(mapController.centerLng, closeTo(107.6500, 0.0001));
+    expect(notifications.updatedCells, equals([(lat: -6.9175, lng: 107.6191)]));
+  });
 }
 
 class _RecordingNotificationService implements NotificationService {

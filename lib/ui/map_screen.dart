@@ -83,6 +83,8 @@ class _MapScreenState extends State<MapScreen> {
   ({double lat, double lng}) _cameraCenter = _defaultCenter;
   ({double lat, double lng}) _lastQueriedCenter = _defaultCenter;
   ({double lat, double lng})? _userLocation;
+  ({double lat, double lng})? _pendingNotificationTarget;
+  bool _hasNotificationFocus = false;
   late Stream<List<RainReport>> _reportsStream;
   List<RainReport> _latestReports = const <RainReport>[];
   List<RainCluster> _latestClusters = const <RainCluster>[];
@@ -127,8 +129,13 @@ class _MapScreenState extends State<MapScreen> {
 
   void _handleNotificationTap(double lat, double lng) {
     if (!mounted) return;
+    _hasNotificationFocus = true;
+    _pendingNotificationTarget = (lat: lat, lng: lng);
     _refreshReportsForCenter((lat: lat, lng: lng));
     _animateMapTo(lat, lng, _userFocusZoom);
+    if (_mapboxMap != null) {
+      _pendingNotificationTarget = null;
+    }
   }
 
   void _refreshReportsForCenter(({double lat, double lng}) newCenter) {
@@ -179,8 +186,6 @@ class _MapScreenState extends State<MapScreen> {
       _userLocation = loc;
     });
     widget.mapTestController?.hasUserLocation = true;
-    _refreshReportsForCenter(loc);
-    _animateMapTo(loc.lat, loc.lng, _userFocusZoom);
     unawaited(_enableLocationPuck());
     unawaited(
       widget.notificationService.updateLocationCell(
@@ -188,6 +193,10 @@ class _MapScreenState extends State<MapScreen> {
         lng: loc.lng,
       ),
     );
+    if (!_hasNotificationFocus) {
+      _refreshReportsForCenter(loc);
+      _animateMapTo(loc.lat, loc.lng, _userFocusZoom);
+    }
   }
 
   void _animateMapTo(double lat, double lng, double zoom) {
@@ -295,7 +304,11 @@ class _MapScreenState extends State<MapScreen> {
       },
     );
 
-    if (_userLocation != null) {
+    final pendingTarget = _pendingNotificationTarget;
+    if (pendingTarget != null) {
+      _pendingNotificationTarget = null;
+      _animateMapTo(pendingTarget.lat, pendingTarget.lng, _userFocusZoom);
+    } else if (_userLocation != null) {
       _animateMapTo(_userLocation!.lat, _userLocation!.lng, _userFocusZoom);
     }
     if (_styleLoaded) {

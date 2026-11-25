@@ -3,6 +3,13 @@ const JWKS_URL =
 
 let cachedJwks = null;
 let cachedJwksExpiresAt = 0;
+let lastForcedRefreshAt = 0;
+
+export function resetJwksCacheForTests() {
+  cachedJwks = null;
+  cachedJwksExpiresAt = 0;
+  lastForcedRefreshAt = 0;
+}
 
 function base64UrlToUint8Array(input) {
   const padded = input.replace(/-/g, '+').replace(/_/g, '/') +
@@ -20,11 +27,7 @@ function decodeJsonSegment(segment) {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-async function getJwks() {
-  const now = Date.now();
-  if (cachedJwks && now < cachedJwksExpiresAt) {
-    return cachedJwks;
-  }
+async function defaultFetchJwks() {
   const res = await fetch(JWKS_URL);
   if (!res.ok) {
     throw new Error(`Failed to fetch Firebase JWKS (${res.status})`);
@@ -33,7 +36,31 @@ async function getJwks() {
   const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
   const maxAgeSeconds = maxAgeMatch ? Number(maxAgeMatch[1]) : 3600;
   const data = await res.json();
-  cachedJwks = data.keys || [];
+  return { keys: data.keys || [], maxAgeSeconds };
+}
+
+async function getJwks({ fetchJwks, forceRefresh = false } = {}) {
+  const now = Date.now();
+  if (!forceRefresh && cachedJwks && now < cachedJwksExpiresAt) {
+    return cachedJwks;
+  }
+  if (forceRefresh && now - lastForcedRefreshAt < 60_000 && cachedJwks) {
+    return cachedJwks;
+  }
+
+  if (forceRefresh) {
+    lastForcedRefreshAt = now;
+  }
+
+  if (fetchJwks) {
+    const keys = await fetchJwks();
+    cachedJwks = keys;
+    cachedJwksExpiresAt = now + 3600 * 1000;
+    return cachedJwks;
+  }
+
+  const { keys, maxAgeSeconds } = await defaultFetchJwks();
+  cachedJwks = keys;
   cachedJwksExpiresAt = now + maxAgeSeconds * 1000;
   return cachedJwks;
 }
@@ -42,9 +69,13 @@ async function getJwks() {
  * Verifies a Firebase Auth ID token (RS256) against Google's SecureToken JWKS.
  * @param {string} token
  * @param {string} projectId
+ * @param {{ fetchJwks?: () => Promise<Array<JsonWebKey & { kid?: string }>> }} [options]
  * @returns {Promise<{ uid: string }>}
  */
-export async function verifyFirebaseIdToken(token, projectId) {
+export async function verifyFirebaseIdToken(token, projectId, options = {}) {
+  if (!projectId) {
+    throw new Error('Missing projectId');
+  }
   const parts = token.split('.');
   if (parts.length !== 3) {
     throw new Error('Malformed JWT');
@@ -72,8 +103,13 @@ export async function verifyFirebaseIdToken(token, projectId) {
     throw new Error('Missing sub');
   }
 
-  const keys = await getJwks();
-  const jwk = keys.find((k) => k.kid === header.kid);
+  let keys = await getJwks({ fetchJwks: options.fetchJwks });
+  let jwk = keys.find((k) => k.kid === header.kid);
+  if (!jwk) {
+    // Key may have rotated while JWKS was cached; force one refresh.
+    keys = await getJwks({ fetchJwks: options.fetchJwks, forceRefresh: true });
+    jwk = keys.find((k) => k.kid === header.kid);
+  }
   if (!jwk) {
     throw new Error('Signing key not found');
   }

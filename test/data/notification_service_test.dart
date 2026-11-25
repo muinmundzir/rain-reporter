@@ -63,6 +63,28 @@ void main() {
       expect(unsubscribed, equals(['rain_$hashBandung']));
     });
 
+    test('updateLocationCell unsubscribes persisted previous topic across app restart', () async {
+      final hashBandung = LocationPrivacy.encodeGeohash(-6.9175, 107.6191, precision: 5);
+      final hashJakarta = LocationPrivacy.encodeGeohash(-6.2000, 106.8166, precision: 5);
+      String? persistedTopic = 'rain_$hashBandung';
+      final subscribed = <String>[];
+      final unsubscribed = <String>[];
+
+      final restartedService = FcmNotificationService(
+        workerUrl: '',
+        subscribeToTopic: (t) async => subscribed.add(t),
+        unsubscribeFromTopic: (t) async => unsubscribed.add(t),
+        loadSavedTopic: () async => persistedTopic,
+        saveTopic: (t) async => persistedTopic = t,
+      );
+
+      await restartedService.updateLocationCell(lat: -6.2000, lng: 106.8166);
+
+      expect(subscribed, equals(['rain_$hashJakarta']));
+      expect(unsubscribed, equals(['rain_$hashBandung']));
+      expect(persistedTopic, equals('rain_$hashJakarta'));
+    });
+
     test('notifyRainReport posts to /notify-rain with Bearer token for heavy and storm reports', () async {
       final requests = <http.Request>[];
       final client = MockClient((req) async {

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createHandler } from '../src/index.mjs';
+import { verifyFirebaseIdToken, resetJwksCacheForTests } from '../src/firebase_auth.mjs';
 
 const baseEnv = {
   FIREBASE_PROJECT_ID: 'rain-reporter-bdg',
@@ -122,4 +123,73 @@ test('sends FCM topic message for valid heavy and storm reports and truncates lo
   assert.equal(res2.status, 200);
   assert.equal(sent[1].title, 'Storm Nearby');
   assert.equal(sent[1].body, 'Reported in your area — tap to view map');
+});
+
+async function makeSignedJwt(privateKey, header, payload) {
+  const b64u = (obj) =>
+    Buffer.from(JSON.stringify(obj)).toString('base64url');
+  const input = `${b64u(header)}.${b64u(payload)}`;
+  const sig = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    privateKey,
+    new TextEncoder().encode(input),
+  );
+  return `${input}.${Buffer.from(sig).toString('base64url')}`;
+}
+
+test('verifyFirebaseIdToken validates RS256 signature, claims, and refreshes JWKS on kid rotation', async () => {
+  resetJwksCacheForTests();
+  const keyPair1 = await crypto.subtle.generateKey(
+    { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+    true,
+    ['sign', 'verify'],
+  );
+  const keyPair2 = await crypto.subtle.generateKey(
+    { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+    true,
+    ['sign', 'verify'],
+  );
+  const jwk1 = { ...(await crypto.subtle.exportKey('jwk', keyPair1.publicKey)), kid: 'k1' };
+  const jwk2 = { ...(await crypto.subtle.exportKey('jwk', keyPair2.publicKey)), kid: 'k2' };
+
+  let fetchCount = 0;
+  const fetchJwks = async () => {
+    fetchCount++;
+    return fetchCount === 1 ? [jwk1] : [jwk1, jwk2];
+  };
+
+  const now = Math.floor(Date.now() / 1000);
+  const validToken1 = await makeSignedJwt(
+    keyPair1.privateKey,
+    { alg: 'RS256', kid: 'k1' },
+    { aud: 'rain-reporter-bdg', iss: 'https://securetoken.google.com/rain-reporter-bdg', exp: now + 300, sub: 'uid-1' },
+  );
+  const verified1 = await verifyFirebaseIdToken(validToken1, 'rain-reporter-bdg', { fetchJwks });
+  assert.equal(verified1.uid, 'uid-1');
+
+  // Expired token rejected
+  const expiredToken = await makeSignedJwt(
+    keyPair1.privateKey,
+    { alg: 'RS256', kid: 'k1' },
+    { aud: 'rain-reporter-bdg', iss: 'https://securetoken.google.com/rain-reporter-bdg', exp: now - 10, sub: 'uid-1' },
+  );
+  await assert.rejects(() => verifyFirebaseIdToken(expiredToken, 'rain-reporter-bdg', { fetchJwks }));
+
+  // Wrong aud rejected
+  const wrongAud = await makeSignedJwt(
+    keyPair1.privateKey,
+    { alg: 'RS256', kid: 'k1' },
+    { aud: 'other-project', iss: 'https://securetoken.google.com/rain-reporter-bdg', exp: now + 300, sub: 'uid-1' },
+  );
+  await assert.rejects(() => verifyFirebaseIdToken(wrongAud, 'rain-reporter-bdg', { fetchJwks }));
+
+  // Rotated key k2 triggers JWKS refresh and succeeds
+  const rotatedToken = await makeSignedJwt(
+    keyPair2.privateKey,
+    { alg: 'RS256', kid: 'k2' },
+    { aud: 'rain-reporter-bdg', iss: 'https://securetoken.google.com/rain-reporter-bdg', exp: now + 300, sub: 'uid-2' },
+  );
+  const verified2 = await verifyFirebaseIdToken(rotatedToken, 'rain-reporter-bdg', { fetchJwks });
+  assert.equal(verified2.uid, 'uid-2');
+  assert.equal(fetchCount, 2);
 });

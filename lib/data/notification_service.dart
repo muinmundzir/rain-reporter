@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../domain/location_privacy.dart';
 import '../domain/rain_intensity.dart';
@@ -50,13 +51,17 @@ class NoOpNotificationService implements NotificationService {
 }
 
 class FcmNotificationService implements NotificationService {
+  static const String _savedTopicKey = 'fcm_subscribed_geohash_topic';
+
   FcmNotificationService({
     required String workerUrl,
     http.Client? httpClient,
     Future<void> Function(String topic)? subscribeToTopic,
     Future<void> Function(String topic)? unsubscribeFromTopic,
     Future<String?> Function()? getIdToken,
-    Duration requestTimeout = const Duration(seconds: 5),
+    Future<String?> Function()? loadSavedTopic,
+    Future<void> Function(String topic)? saveTopic,
+    this.requestTimeout = const Duration(seconds: 5),
   })  : _workerUrl = workerUrl.trim().replaceAll(RegExp(r'/+$'), ''),
         _httpClient = httpClient ?? http.Client(),
         _ownsHttpClient = httpClient == null,
@@ -66,7 +71,8 @@ class FcmNotificationService implements NotificationService {
             ((topic) => FirebaseMessaging.instance.unsubscribeFromTopic(topic)),
         _getIdToken = getIdToken ??
             (() async => FirebaseAuth.instance.currentUser?.getIdToken()),
-        _requestTimeout = requestTimeout;
+        _loadSavedTopic = loadSavedTopic ?? _defaultLoadSavedTopic,
+        _saveTopic = saveTopic ?? _defaultSaveTopic;
 
   final String _workerUrl;
   final http.Client _httpClient;
@@ -74,10 +80,31 @@ class FcmNotificationService implements NotificationService {
   final Future<void> Function(String topic) _subscribeToTopic;
   final Future<void> Function(String topic) _unsubscribeFromTopic;
   final Future<String?> Function() _getIdToken;
-  final Duration _requestTimeout;
+  final Future<String?> Function() _loadSavedTopic;
+  final Future<void> Function(String topic) _saveTopic;
+  final Duration requestTimeout;
 
   String? _currentTopic;
+  bool _hydratedSavedTopic = false;
   StreamSubscription<RemoteMessage>? _openedAppSub;
+
+  static Future<String?> _defaultLoadSavedTopic() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_savedTopicKey);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> _defaultSaveTopic(String topic) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_savedTopicKey, topic);
+    } catch (_) {
+      // Best-effort persistence.
+    }
+  }
 
   @override
   Future<void> initialize({
@@ -117,6 +144,11 @@ class FcmNotificationService implements NotificationService {
     required double lat,
     required double lng,
   }) async {
+    if (!_hydratedSavedTopic) {
+      _hydratedSavedTopic = true;
+      _currentTopic = await _loadSavedTopic();
+    }
+
     final geohash5 = LocationPrivacy.encodeGeohash(lat, lng, precision: 5);
     final nextTopic = 'rain_$geohash5';
     if (nextTopic == _currentTopic) return;
@@ -125,6 +157,7 @@ class FcmNotificationService implements NotificationService {
     try {
       await _subscribeToTopic(nextTopic);
       _currentTopic = nextTopic;
+      await _saveTopic(nextTopic);
       if (previousTopic != null) {
         await _unsubscribeFromTopic(previousTopic);
       }
@@ -168,7 +201,7 @@ class FcmNotificationService implements NotificationService {
             },
             body: jsonEncode(payload),
           )
-          .timeout(_requestTimeout);
+          .timeout(requestTimeout);
     } catch (_) {
       // Push trigger is best-effort and must never fail a rain report submission.
     }
