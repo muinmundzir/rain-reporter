@@ -1,47 +1,29 @@
-const GEOHASH5_RE = /^[0-9b-hjkmnp-z]{5}$/;
-const ALLOWED_INTENSITIES = new Set(['heavy', 'storm']);
+export const ALLOWED_INTENSITIES = new Set(['heavy', 'storm']);
+
+// Firestore document ids are safe for a REST path segment. Restrict the charset
+// so a caller can't smuggle a `/` or query string into the Firestore URL.
+const REPORT_ID_RE = /^[\w.-]{1,128}$/;
 
 /**
- * Validates and normalizes the incoming rain notification payload.
+ * Extracts and validates the `reportId` from the incoming notification payload.
+ *
+ * The worker no longer trusts any client-supplied rain data (intensity,
+ * location, note): it re-reads the authoritative report document from
+ * Firestore keyed by this id. So the only thing we accept from the client is
+ * the id itself.
+ *
  * @param {unknown} raw
- * @returns {{ ok: true, value: { geohash5: string, intensity: 'heavy' | 'storm', lat: number, lng: number, note: string | null } } | { ok: false, error: string }}
+ * @returns {{ ok: true, value: { reportId: string } } | { ok: false, error: string }}
  */
-export function validateRainPayload(raw) {
+export function extractReportId(raw) {
   if (!raw || typeof raw !== 'object') {
     return { ok: false, error: 'Body must be a JSON object' };
   }
 
-  const { geohash5, intensity, lat, lng, note } = raw;
-
-  if (typeof intensity !== 'string' || !ALLOWED_INTENSITIES.has(intensity)) {
-    return { ok: false, error: 'Only heavy and storm intensities trigger alerts' };
-  }
-  if (typeof geohash5 !== 'string' || !GEOHASH5_RE.test(geohash5)) {
-    return { ok: false, error: 'Invalid 5-char geohash' };
-  }
-  if (typeof lat !== 'number' || !Number.isFinite(lat) || lat < -90 || lat > 90) {
-    return { ok: false, error: 'Invalid lat' };
-  }
-  if (typeof lng !== 'number' || !Number.isFinite(lng) || lng < -180 || lng > 180) {
-    return { ok: false, error: 'Invalid lng' };
+  const { reportId } = raw;
+  if (typeof reportId !== 'string' || !REPORT_ID_RE.test(reportId)) {
+    return { ok: false, error: 'Missing or invalid reportId' };
   }
 
-  let cleanNote = null;
-  if (typeof note === 'string') {
-    const trimmed = note.trim();
-    if (trimmed.length > 0) {
-      cleanNote = trimmed.slice(0, 140);
-    }
-  }
-
-  return {
-    ok: true,
-    value: {
-      geohash5,
-      intensity: /** @type {'heavy' | 'storm'} */ (intensity),
-      lat,
-      lng,
-      note: cleanNote,
-    },
-  };
+  return { ok: true, value: { reportId } };
 }

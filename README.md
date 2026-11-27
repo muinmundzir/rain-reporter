@@ -32,3 +32,18 @@ A lightweight, crowd-sourced Android app for reporting and checking live local r
    flutter test
    flutter build apk --release --dart-define-from-file=mapbox.json
    ```
+
+## Push-notification hardening
+
+The `rain-notifier` worker no longer trusts client-supplied rain data. When a
+client posts to `POST /notify-rain` it now sends only a `reportId`; the worker
+re-reads that report **authoritatively from Firestore** (via the same
+service-account key it already uses for FCM) and derives the FCM topic cell,
+intensity, note, and owner from the stored document. A report only alerts when
+it still exists, is owned by the authenticated user, is not yet expired, and
+its stored intensity is `heavy` or `storm`. This closes the spoofing path that
+let any valid anonymous Firebase token forge alerts for arbitrary cells.
+
+The service account used for FCM (`FIREBASE_CLIENT_EMAIL` /
+`FIREBASE_PRIVATE_KEY`) must also be able to read the `reports` collection —
+which is true for the project's Firebase admin service account by default.

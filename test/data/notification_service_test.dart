@@ -113,13 +113,15 @@ void main() {
       expect(requests[0].headers['authorization'], equals('Bearer firebase-jwt-123'));
 
       final body0 = jsonDecode(requests[0].body) as Map<String, dynamic>;
-      expect(body0['intensity'], equals('heavy'));
-      expect(body0['geohash5'], equals(LocationPrivacy.encodeGeohash(-6.9175, 107.6191, precision: 5)));
-      expect(body0['note'], equals('Flooding near station'));
+      // Only the report id is sent. Intensity, geohash and note are no longer
+      // supplied by the client — the worker re-reads them authoritatively from
+      // Firestore — so the payload must contain nothing but the id.
+      expect(body0['reportId'], equals('r1'));
+      expect(body0.keys, equals({'reportId'}));
 
       final body1 = jsonDecode(requests[1].body) as Map<String, dynamic>;
-      expect(body1['intensity'], equals('storm'));
-      expect(body1.containsKey('note'), isFalse);
+      expect(body1['reportId'], equals('r1'));
+      expect(body1.keys, equals({'reportId'}));
     });
 
     test('notifyRainReport is a no-op for light, moderate, and stopped reports', () async {
