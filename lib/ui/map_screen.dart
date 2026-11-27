@@ -15,6 +15,7 @@ import '../domain/rain_zone_geojson.dart';
 import 'cluster_detail_bottom_sheet.dart';
 import 'mapbox_marker_icons.dart';
 import 'pin_detail_bottom_sheet.dart';
+import 'radar_overlay.dart';
 import 'report_bottom_sheet.dart';
 
 /// Lightweight controller exposed only when `useNativeMapView == false`
@@ -80,6 +81,9 @@ class _MapScreenState extends State<MapScreen> {
   static const String _rainZonesFillLayerId = 'rain-zones-fill';
   static const String _rainZonesLineLayerId = 'rain-zones-line';
 
+  static const String _radarSourceId = 'rain-radar-source';
+  static const String _radarLayerId = 'rain-radar-layer';
+
   ({double lat, double lng}) _cameraCenter = _defaultCenter;
   ({double lat, double lng}) _lastQueriedCenter = _defaultCenter;
   ({double lat, double lng})? _userLocation;
@@ -99,10 +103,14 @@ class _MapScreenState extends State<MapScreen> {
   String? _lastSyncedFingerprint;
   final Map<String, RainCluster> _annotationClusters = {};
   final MapboxMarkerIcons _markerIcons = MapboxMarkerIcons();
+  bool _radarOn = false;
 
   @override
   void initState() {
     super.initState();
+    // Show the radar overlay by default when a source was configured at build
+    // time; the AppBar toggle can turn it off on demand.
+    _radarOn = RadarConfig.hasSource;
     widget.mapTestController?._onSimulatedMove = (lat, lng, _) {
       _onCameraCenterChanged(lat, lng);
     };
@@ -355,9 +363,82 @@ class _MapScreenState extends State<MapScreen> {
       );
     }
 
+    // Weather-radar raster, rendered *behind* the rain zones and pins.
+    // Only when configured at build time; a failed tile load is ignored so
+    // the rest of the map keeps working.
+    if (RadarConfig.hasSource) {
+      try {
+        if (!await mapboxMap.styleSourceExists(_radarSourceId)) {
+          await mapboxMap.addSource(
+            RadarConfig.buildSource(_radarSourceId),
+          );
+        }
+        if (_radarOn && !await mapboxMap.styleLayerExists(_radarLayerId)) {
+          await mapboxMap.addLayer(
+            RadarConfig.buildLayer(_radarLayerId, _radarSourceId),
+          );
+        }
+      } catch (_) {
+        // Radar source failed to load; degrade gracefully (no overlay).
+      }
+    }
+
     _styleLoaded = true;
     _lastSyncedFingerprint = null;
     await _syncMapboxLayers(_latestClusters);
+  }
+
+  Future<void> _showRadarLayer() async {
+    final mapboxMap = _mapboxMap;
+    if (!mounted || mapboxMap == null || !RadarConfig.hasSource) return;
+    try {
+      if (!await mapboxMap.styleSourceExists(_radarSourceId)) {
+        await mapboxMap.addSource(
+          RadarConfig.buildSource(_radarSourceId),
+        );
+      }
+      if (!await mapboxMap.styleLayerExists(_radarLayerId)) {
+        await mapboxMap.addLayer(
+          RadarConfig.buildLayer(_radarLayerId, _radarSourceId),
+        );
+      }
+    } catch (_) {
+      // Ignore transient / unavailable radar tile errors.
+    }
+  }
+
+  Future<void> _hideRadarLayer() async {
+    final mapboxMap = _mapboxMap;
+    if (!mounted || mapboxMap == null) return;
+    try {
+      if (await mapboxMap.styleLayerExists(_radarLayerId)) {
+        await mapboxMap.removeStyleLayer(_radarLayerId);
+      }
+    } catch (_) {
+      // Ignore errors when removing a radar layer that is not present.
+    }
+  }
+
+  void _toggleRadar() {
+    if (!RadarConfig.hasSource) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Radar overlay is not configured. Build with '
+            '--dart-define RADAR_TILES=<tile-url> to enable it.',
+          ),
+        ),
+      );
+      return;
+    }
+    final turnOn = !_radarOn;
+    setState(() => _radarOn = turnOn);
+    if (turnOn) {
+      _showRadarLayer();
+    } else {
+      _hideRadarLayer();
+    }
   }
 
   String _clustersFingerprint(List<RainCluster> clusters) {
@@ -691,6 +772,17 @@ class _MapScreenState extends State<MapScreen> {
           appBar: AppBar(
             title: const Text('Rain Reporter'),
             actions: [
+              IconButton(
+                key: const Key('radar_toggle'),
+                tooltip: RadarConfig.hasSource
+                    ? (_radarOn ? 'Hide radar' : 'Show radar')
+                    : 'Radar not configured',
+                color: _radarOn && RadarConfig.hasSource
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).hintColor,
+                icon: const Icon(Icons.cloud),
+                onPressed: _toggleRadar,
+              ),
               Padding(
                 padding: const EdgeInsets.only(right: 12),
                 child: Chip(
