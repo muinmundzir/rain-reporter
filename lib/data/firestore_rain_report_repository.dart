@@ -21,10 +21,15 @@ class FirestoreRainReportRepository implements RainReportRepository {
     required double centerLng,
     double radiusMeters = 10000,
   }) {
-    final now = _clock();
+    // Spatially pre-filter to the coarse cells around the center instead of
+    // scanning the whole collection. The coarse `geohash4` cells are a bounded
+    // superset of the search radius; freshness and exact distance are still
+    // refined client-side below (kept off the server query so this uses only a
+    // single-field index, not a composite one).
+    final cells = LocationPrivacy.watchCells(centerLat, centerLng, precision: 4);
     return _firestore
         .collection('reports')
-        .where('expiresAt', isGreaterThan: Timestamp.fromDate(now))
+        .where('geohash4', whereIn: cells)
         .snapshots()
         .map((snapshot) {
       final currentNow = _clock();
@@ -77,6 +82,7 @@ class FirestoreRainReportRepository implements RainReportRepository {
       'lat': report.lat,
       'lng': report.lng,
       'geohash': report.geohash,
+      'geohash4': report.geohash.length >= 4 ? report.geohash.substring(0, 4) : '',
       'confirmCount': 1,
       'stoppedCount': 0,
       'createdAt': FieldValue.serverTimestamp(),
