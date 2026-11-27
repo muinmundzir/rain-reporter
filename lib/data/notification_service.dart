@@ -178,18 +178,13 @@ class FcmNotificationService implements NotificationService {
       final idToken = await _getIdToken();
       if (idToken == null || idToken.isEmpty) return;
 
-      final geohash5 = LocationPrivacy.encodeGeohash(
-        report.lat,
-        report.lng,
-        precision: 5,
-      );
       final uri = Uri.parse('$_workerUrl/notify-rain');
+      // Only the report id is sent. The worker re-reads the authoritative
+      // report (owner, intensity, location, freshness) from Firestore before
+      // pushing, so the client can no longer spoof the alert content, target,
+      // or location.
       final payload = <String, dynamic>{
-        'geohash5': geohash5,
-        'intensity': report.intensity.wireName,
-        'lat': report.lat,
-        'lng': report.lng,
-        if (report.note != null) 'note': report.note,
+        'reportId': report.id,
       };
 
       await _httpClient
