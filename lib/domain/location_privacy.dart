@@ -129,4 +129,72 @@ class LocationPrivacy {
       return !supersededByStopped;
     }).toList();
   }
+
+  /// Decodes a base32 [geohash] to its bounding box in degrees.
+  /// Mirrors the bit order of [encodeGeohash] (even bits split longitude).
+  static ({
+    double minLat,
+    double maxLat,
+    double minLng,
+    double maxLng,
+  }) geohashCellBounds(String geohash) {
+    double minLat = -90.0, maxLat = 90.0;
+    double minLng = -180.0, maxLng = 180.0;
+    var isEven = true;
+    for (var i = 0; i < geohash.length; i++) {
+      final idx = _base32.indexOf(geohash[i]);
+      if (idx < 0) continue;
+      for (var bit = 4; bit >= 0; bit--) {
+        final b = (idx >> bit) & 1;
+        if (isEven) {
+          final mid = (minLng + maxLng) / 2;
+          if (b == 1) {
+            minLng = mid;
+          } else {
+            maxLng = mid;
+          }
+        } else {
+          final mid = (minLat + maxLat) / 2;
+          if (b == 1) {
+            minLat = mid;
+          } else {
+            maxLat = mid;
+          }
+        }
+        isEven = !isEven;
+      }
+    }
+    return (minLat: minLat, maxLat: maxLat, minLng: minLng, maxLng: maxLng);
+  }
+
+  /// The coarse geohash [precision] cells (center + 8 neighbors) that bound a
+  /// search area around ([lat], [lng]). Used to spatially pre-filter Firestore
+  /// reports: querying only these cells instead of the whole collection.
+  ///
+  /// [precision] 4 cells are ~a few dozen km wide, so a 3×3 block comfortably
+  /// contains a ~10 km radius; the caller still refines by exact distance.
+  static List<String> watchCells(
+    double lat,
+    double lng, {
+    int precision = 4,
+  }) {
+    final center = encodeGeohash(lat, lng, precision: precision);
+    final b = geohashCellBounds(center);
+    final latStep = b.maxLat - b.minLat;
+    final lngStep = b.maxLng - b.minLng;
+    final latMid = (b.minLat + b.maxLat) / 2;
+    final lngMid = (b.minLng + b.maxLng) / 2;
+
+    final cells = <String>{};
+    for (var dLat = -1; dLat <= 1; dLat++) {
+      for (var dLng = -1; dLng <= 1; dLng++) {
+        // Center of the center cell plus a full-cell step in each direction
+        // gives the 9 adjacent cells; keep them strictly inside valid lat/lng.
+        final nLat = (latMid + dLat * latStep).clamp(-89.99999, 89.99999);
+        final nLng = (lngMid + dLng * lngStep).clamp(-179.99999, 179.99999);
+        cells.add(encodeGeohash(nLat, nLng, precision: precision));
+      }
+    }
+    return cells.toList();
+  }
 }

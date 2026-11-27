@@ -7,6 +7,13 @@
         { "fieldPath": "geohash", "order": "ASCENDING" },
         { "fieldPath": "expiresAt", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "reports",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "geohash4", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

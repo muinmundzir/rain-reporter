@@ -9,6 +9,7 @@ A lightweight, crowd-sourced Android app for reporting and checking live local r
 - **Merged Rain Zones & Clusters:** Nearby reports within 600 m merge into a single expanded rain zone (`Circle`/GeoJSON polygon) and cluster count badge colored by the strongest reported intensity.
 - **30-Minute Freshness & Crowd Verification:** Reports automatically expire after 30 minutes or when nearby users within 500 m confirm rain has stopped (`Stopped here`).
 - **Zero-Friction Anonymous Auth:** Uses Firebase Anonymous Auth under the hood — no account signup required.
+- **Spatial Report Query:** Nearby reports are fetched with a coarse geohash `whereIn` pre-filter (`geohash4`, the report's 4-char geohash cell) around your center, so the client only downloads reports in your ~neighborhood instead of the entire collection. Exact radius + freshness are still refined on-device.
 
 ## Tech Stack
 

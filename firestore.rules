@@ -105,6 +105,7 @@ service cloud.firestore {
         'lat',
         'lng',
         'geohash',
+        'geohash4',
         'confirmCount',
         'stoppedCount',
         'createdAt',
@@ -127,6 +128,11 @@ service cloud.firestore {
         data.geohash is string &&
         data.geohash.size() >= 1 &&
         data.geohash.size() <= 12 &&
+        ('geohash4' in data
+          ? (data.geohash4 is string &&
+             data.geohash4.size() >= 1 &&
+             data.geohash4.size() <= 12)
+          : true) &&
         data.confirmCount is int &&
         data.confirmCount >= 1 &&
         data.stoppedCount is int &&
